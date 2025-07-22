@@ -1,10 +1,7 @@
 import sys
 
-if sys.version_info < (3, 9):
-    from typing import AsyncIterator
-else:
-    from collections.abc import AsyncIterator
-
+from collections.abc import AsyncIterator
+from typing import Any
 import pipmaster as pm  # Pipmaster for dynamic library install
 
 # install specific modules
@@ -24,6 +21,7 @@ from lightrag.utils import (
     wrap_embedding_func_with_attrs,
     locate_json_string_body_from_string,
     logger,
+    verbose_debug,
 )
 from lightrag.api import __api_version__
 
@@ -193,12 +191,12 @@ async def gemini_complete_if_cache(
 
 # Generic Gemini completion function
 async def gemini_complete(
-    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, model=None, api_key=None, **kwargs
 ) -> Union[str, AsyncIterator[str]]:
     """Generic Gemini completion function compatible with LightRAG interface"""
     if history_messages is None:
         history_messages = []
-    
+
     # Handle keyword extraction
     if keyword_extraction:
         extraction_prompt = """Please extract keywords from the following text and return them in JSON format:
@@ -207,31 +205,42 @@ async def gemini_complete(
             "low_level_keywords": ["keyword1", "keyword2", "keyword3"]
         }
         Only return the JSON, no other text."""
-        
+
         if system_prompt:
             system_prompt = f"{system_prompt}\n\n{extraction_prompt}"
         else:
             system_prompt = extraction_prompt
-    
-    # Get model name from global config
-    hashing_kv = kwargs.get("hashing_kv")
-    if hashing_kv and hasattr(hashing_kv, 'global_config'):
-        model_name = hashing_kv.global_config.get("llm_model_name", "gemini-2.5-flash")
+
+    # Get model name from parameter, global config, or default
+    if model:
+        model_name = model
     else:
-        model_name = "gemini-2.5-flash"
-    
+        hashing_kv = kwargs.get("hashing_kv")
+        if hashing_kv and hasattr(hashing_kv, 'global_config'):
+            model_name = hashing_kv.global_config.get("llm_model_name", "gemini-2.5-flash")
+        else:
+            model_name = "gemini-2.5-flash"
+
+    # Remove conflicting parameters from kwargs to avoid duplication
+    conflicting_params = [
+        "model", "api_key", "_priority", "hashing_kv",
+        "cache_type", "mode", "keyword_extraction"
+    ]
+    clean_kwargs = {k: v for k, v in kwargs.items() if k not in conflicting_params}
+
     result = await gemini_complete_if_cache(
         model_name,
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
-        **kwargs,
+        api_key=api_key,
+        **clean_kwargs,
     )
-    
+
     if keyword_extraction and isinstance(result, str):
         # Extract JSON from response for keyword extraction
         return locate_json_string_body_from_string(result)
-    
+
     return result
 
 
@@ -265,7 +274,10 @@ async def gemini_embed(
         return np.array([])
 
     # Configure client
-    configure_gemini_client(api_key)
+    api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_BINDING_API_KEY")
+    if not api_key:
+        raise ValueError("Google Gemini API key is required")
+    genai.configure(api_key=api_key)
 
     logger.debug(f"Gemini embedding request: model={model}, texts_count={len(texts)}")
     verbose_debug(f"Texts to embed: {[text[:100] + '...' if len(text) > 100 else text for text in texts]}")

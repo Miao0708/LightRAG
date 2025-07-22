@@ -23,6 +23,7 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log,
 )
+import logging
 from lightrag.utils import (
     wrap_embedding_func_with_attrs,
     locate_json_string_body_from_string,
@@ -91,7 +92,7 @@ _rate_limit_tracker = RateLimitTracker()
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError)
     ),
-    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
+    before_sleep=before_sleep_log(logger, logging.WARNING),  # 添加重试前的日志
 )
 async def siliconcloud_embedding(
     texts: list[str],
@@ -133,7 +134,7 @@ async def siliconcloud_embedding(
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError, InvalidResponseError)
     ),
-    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
+    before_sleep=before_sleep_log(logger, logging.WARNING),  # 修复日志级别
 )
 async def siliconflow_complete_if_cache(
     model,
@@ -148,9 +149,13 @@ async def siliconflow_complete_if_cache(
     if history_messages is None:
         history_messages = []
 
-    # Remove LightRAG-specific kwargs
-    kwargs.pop("hashing_kv", None)
-    kwargs.pop("keyword_extraction", None)
+    # Remove LightRAG-specific kwargs that OpenAI API doesn't accept
+    lightrag_specific_params = [
+        "hashing_kv", "keyword_extraction", "_priority", "model",
+        "api_key", "base_url", "cache_type", "mode"
+    ]
+    for param in lightrag_specific_params:
+        kwargs.pop(param, None)
 
     # Get API key
     api_key = api_key or os.getenv("SILICONFLOW_API_KEY") or os.getenv("LLM_BINDING_API_KEY")
@@ -240,23 +245,37 @@ async def siliconflow_complete_if_cache(
 
 
 async def siliconflow_complete(
-    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False,
+    model=None, api_key=None, base_url=None, **kwargs
 ) -> Union[str, AsyncIterator[str]]:
     if keyword_extraction:
         kwargs["response_format"] = {"type": "json_object"}
 
-    # Get model name from global config
-    hashing_kv = kwargs.get("hashing_kv")
-    if hashing_kv and hasattr(hashing_kv, 'global_config'):
-        model_name = hashing_kv.global_config.get("llm_model_name", "Qwen/Qwen2.5-7B-Instruct")
+    # Get model name from parameter, global config, or default
+    if model:
+        model_name = model
     else:
-        model_name = "Qwen/Qwen2.5-7B-Instruct"
+        hashing_kv = kwargs.get("hashing_kv")
+        if hashing_kv and hasattr(hashing_kv, 'global_config'):
+            model_name = hashing_kv.global_config.get("llm_model_name", "Qwen/Qwen2.5-7B-Instruct")
+        else:
+            model_name = "Qwen/Qwen2.5-7B-Instruct"
+
+    # Remove conflicting parameters from kwargs
+    conflicting_params = [
+        "model", "api_key", "base_url", "_priority", "hashing_kv",
+        "cache_type", "mode", "keyword_extraction"
+    ]
+    for param in conflicting_params:
+        kwargs.pop(param, None)
 
     result = await siliconflow_complete_if_cache(
         model_name,
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
+        api_key=api_key,
+        base_url=base_url,
         **kwargs,
     )
 
@@ -274,7 +293,7 @@ async def siliconflow_complete(
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError, InvalidResponseError)
     ),
-    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
+    before_sleep=before_sleep_log(logger, logging.WARNING),  # 修复日志级别
 )
 async def siliconflow_embed(
     texts, model="BAAI/bge-m3", base_url="https://api.siliconflow.cn/v1", api_key=None, **kwargs

@@ -14,6 +14,15 @@ from typing import (
 )
 from .utils import EmbeddingFunc
 from .types import KnowledgeGraph
+
+
+def safe_int_from_env(env_var: str, default: str) -> int:
+    """Safely parse integer from environment variable, removing comments."""
+    value = os.getenv(env_var, default)
+    # Remove comments (everything after #) and strip whitespace
+    if '#' in value:
+        value = value.split('#')[0].strip()
+    return int(value)
 from .constants import (
     GRAPH_FIELD_SEP,
     DEFAULT_TOP_K,
@@ -74,19 +83,13 @@ class QueryParam:
     If None, defaults to top_k value.
     """
 
-    max_entity_tokens: int = int(
-        os.getenv("MAX_ENTITY_TOKENS", str(DEFAULT_MAX_ENTITY_TOKENS))
-    )
+    max_entity_tokens: int = safe_int_from_env("MAX_ENTITY_TOKENS", str(DEFAULT_MAX_ENTITY_TOKENS))
     """Maximum number of tokens allocated for entity context in unified token control system."""
 
-    max_relation_tokens: int = int(
-        os.getenv("MAX_RELATION_TOKENS", str(DEFAULT_MAX_RELATION_TOKENS))
-    )
+    max_relation_tokens: int = safe_int_from_env("MAX_RELATION_TOKENS", str(DEFAULT_MAX_RELATION_TOKENS))
     """Maximum number of tokens allocated for relationship context in unified token control system."""
 
-    max_total_tokens: int = int(
-        os.getenv("MAX_TOTAL_TOKENS", str(DEFAULT_MAX_TOTAL_TOKENS))
-    )
+    max_total_tokens: int = safe_int_from_env("MAX_TOTAL_TOKENS", str(DEFAULT_MAX_TOTAL_TOKENS))
     """Maximum total tokens budget for the entire query context (entities + relations + chunks + system prompt)."""
 
     hl_keywords: list[str] = field(default_factory=list)

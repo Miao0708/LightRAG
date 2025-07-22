@@ -118,7 +118,16 @@ async def _handle_entity_relation_summary(
     For each entity or relation, input is the combined description of already existing description and new description.
     If too long, use LLM to summarize.
     """
-    use_llm_func: callable = global_config["llm_model_func"]
+    # Determine if this is an entity or relation based on the name format
+    # Relations typically contain "-" separator (e.g., "entity1-entity2")
+    is_relation = "-" in entity_or_relation_name
+
+    # Use task-specific LLM function if available
+    if is_relation:
+        use_llm_func: callable = global_config.get("relation_summary_llm_func") or global_config["llm_model_func"]
+    else:
+        use_llm_func: callable = global_config.get("entity_summary_llm_func") or global_config["llm_model_func"]
+
     # Apply higher priority (8) to entity/relation summary tasks
     use_llm_func = partial(use_llm_func, _priority=8)
 
@@ -1358,7 +1367,8 @@ async def extract_entities(
     llm_response_cache: BaseKVStorage | None = None,
     text_chunks_storage: BaseKVStorage | None = None,
 ) -> list:
-    use_llm_func: callable = global_config["llm_model_func"]
+    # Use task-specific LLM function if available, otherwise fall back to global function
+    use_llm_func: callable = global_config.get("entity_extraction_llm_func") or global_config["llm_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
 
     ordered_chunks = list(chunks.items())
@@ -1610,7 +1620,8 @@ async def kg_query(
     if query_param.model_func:
         use_model_func = query_param.model_func
     else:
-        use_model_func = global_config["llm_model_func"]
+        # Use task-specific query LLM function if available, otherwise fall back to global function
+        use_model_func = global_config.get("query_llm_func") or global_config["llm_model_func"]
         # Apply higher priority (5) to query relation LLM function
         use_model_func = partial(use_model_func, _priority=5)
 
@@ -1826,7 +1837,8 @@ async def extract_keywords_only(
     if param.model_func:
         use_model_func = param.model_func
     else:
-        use_model_func = global_config["llm_model_func"]
+        # Use task-specific keyword extraction LLM function if available, otherwise fall back to global function
+        use_model_func = global_config.get("keyword_extraction_llm_func") or global_config["llm_model_func"]
         # Apply higher priority (5) to query relation LLM function
         use_model_func = partial(use_model_func, _priority=5)
 

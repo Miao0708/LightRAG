@@ -91,10 +91,23 @@ async def zhipu_complete_if_cache(
 
 
 async def zhipu_complete(
-    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, model=None, api_key=None, **kwargs
 ):
     # Pop keyword_extraction from kwargs to avoid passing it to zhipu_complete_if_cache
     keyword_extraction = kwargs.pop("keyword_extraction", None)
+
+    # Remove conflicting parameters from kwargs to avoid duplication
+    conflicting_params = [
+        "model", "api_key", "_priority", "hashing_kv",
+        "cache_type", "mode", "keyword_extraction"
+    ]
+    clean_kwargs = {k: v for k, v in kwargs.items() if k not in conflicting_params}
+
+    # Add model and api_key to clean_kwargs if provided
+    if model:
+        clean_kwargs["model"] = model
+    if api_key:
+        clean_kwargs["api_key"] = api_key
 
     if keyword_extraction:
         # Add a system prompt to guide the model to return JSON format
@@ -122,7 +135,7 @@ async def zhipu_complete(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 history_messages=history_messages,
-                **kwargs,
+                **clean_kwargs,
             )
 
             # Try to parse as JSON
@@ -163,7 +176,7 @@ async def zhipu_complete(
             prompt=prompt,
             system_prompt=system_prompt,
             history_messages=history_messages,
-            **kwargs,
+            **clean_kwargs,
         )
 
 

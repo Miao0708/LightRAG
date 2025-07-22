@@ -278,6 +278,24 @@ class LightRAG:
     llm_model_kwargs: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments passed to the LLM model function."""
 
+    # Task-specific LLM Configuration
+    # ---
+
+    entity_extraction_llm_func: Callable[..., object] | None = field(default=None)
+    """Function for entity extraction tasks. If None, uses llm_model_func."""
+
+    entity_summary_llm_func: Callable[..., object] | None = field(default=None)
+    """Function for entity summarization tasks. If None, uses llm_model_func."""
+
+    relation_summary_llm_func: Callable[..., object] | None = field(default=None)
+    """Function for relation summarization tasks. If None, uses llm_model_func."""
+
+    query_llm_func: Callable[..., object] | None = field(default=None)
+    """Function for query response tasks. If None, uses llm_model_func."""
+
+    keyword_extraction_llm_func: Callable[..., object] | None = field(default=None)
+    """Function for keyword extraction tasks. If None, uses llm_model_func."""
+
     # Rerank Configuration
     # ---
 
@@ -399,6 +417,9 @@ class LightRAG:
 
         _print_config = ",\n  ".join([f"{k} = {v}" for k, v in global_config.items()])
         logger.debug(f"LightRAG init with param:\n  {_print_config}\n")
+
+        # Initialize task-specific LLM functions from environment variables
+        self._initialize_task_specific_llm_functions()
 
         # Init Embedding
         self.embedding_func = priority_limit_async_func_call(
@@ -1132,12 +1153,23 @@ class LightRAG:
                             try:
                                 # Get chunk_results from entity_relation_task
                                 chunk_results = await entity_relation_task
+
+                                # Create global config with task-specific model functions
+                                global_config = asdict(self)
+                                global_config.update({
+                                    "entity_extraction_llm_func": self.entity_extraction_llm_func,
+                                    "entity_summary_llm_func": self.entity_summary_llm_func,
+                                    "relation_summary_llm_func": self.relation_summary_llm_func,
+                                    "query_llm_func": self.query_llm_func,
+                                    "keyword_extraction_llm_func": self.keyword_extraction_llm_func,
+                                })
+
                                 await merge_nodes_and_edges(
                                     chunk_results=chunk_results,  # result collected from entity_relation_task
                                     knowledge_graph_inst=self.chunk_entity_relation_graph,
                                     entity_vdb=self.entities_vdb,
                                     relationships_vdb=self.relationships_vdb,
-                                    global_config=asdict(self),
+                                    global_config=global_config,
                                     pipeline_status=pipeline_status,
                                     pipeline_status_lock=pipeline_status_lock,
                                     llm_response_cache=self.llm_response_cache,
@@ -1270,9 +1302,19 @@ class LightRAG:
         self, chunk: dict[str, Any], pipeline_status=None, pipeline_status_lock=None
     ) -> list:
         try:
+            # Create global config with task-specific model functions
+            global_config = asdict(self)
+            global_config.update({
+                "entity_extraction_llm_func": self.entity_extraction_llm_func,
+                "entity_summary_llm_func": self.entity_summary_llm_func,
+                "relation_summary_llm_func": self.relation_summary_llm_func,
+                "query_llm_func": self.query_llm_func,
+                "keyword_extraction_llm_func": self.keyword_extraction_llm_func,
+            })
+
             chunk_results = await extract_entities(
                 chunk,
-                global_config=asdict(self),
+                global_config=global_config,
                 pipeline_status=pipeline_status,
                 pipeline_status_lock=pipeline_status_lock,
                 llm_response_cache=self.llm_response_cache,
@@ -1535,7 +1577,16 @@ class LightRAG:
             str: The result of the query execution.
         """
         # If a custom model is provided in param, temporarily update global config
+        # Create global config with task-specific model functions
         global_config = asdict(self)
+        global_config.update({
+            "entity_extraction_llm_func": self.entity_extraction_llm_func,
+            "entity_summary_llm_func": self.entity_summary_llm_func,
+            "relation_summary_llm_func": self.relation_summary_llm_func,
+            "query_llm_func": self.query_llm_func,
+            "keyword_extraction_llm_func": self.keyword_extraction_llm_func,
+        })
+
         # Save original query for vector search
         param.original_query = query
 
@@ -1563,7 +1614,8 @@ class LightRAG:
             )
         elif param.mode == "bypass":
             # Bypass mode: directly use LLM without knowledge retrieval
-            use_llm_func = param.model_func or global_config["llm_model_func"]
+            # Use task-specific query LLM function if available, otherwise fall back to global function
+            use_llm_func = param.model_func or global_config.get("query_llm_func") or global_config["llm_model_func"]
             # Apply higher priority (8) to entity/relation summary tasks
             use_llm_func = partial(use_llm_func, _priority=8)
 
@@ -2419,3 +2471,202 @@ class LightRAG:
         loop.run_until_complete(
             self.aexport_data(output_path, file_format, include_vector_data)
         )
+
+    def _initialize_task_specific_llm_functions(self):
+        """Initialize task-specific LLM functions from environment variables."""
+        from .constants import (
+            ENTITY_EXTRACTION_LLM_BINDING,
+            ENTITY_EXTRACTION_LLM_MODEL,
+            ENTITY_EXTRACTION_LLM_BINDING_HOST,
+            ENTITY_EXTRACTION_LLM_BINDING_API_KEY,
+            ENTITY_SUMMARY_LLM_BINDING,
+            ENTITY_SUMMARY_LLM_MODEL,
+            ENTITY_SUMMARY_LLM_BINDING_HOST,
+            ENTITY_SUMMARY_LLM_BINDING_API_KEY,
+            RELATION_SUMMARY_LLM_BINDING,
+            RELATION_SUMMARY_LLM_MODEL,
+            RELATION_SUMMARY_LLM_BINDING_HOST,
+            RELATION_SUMMARY_LLM_BINDING_API_KEY,
+            QUERY_LLM_BINDING,
+            QUERY_LLM_MODEL,
+            QUERY_LLM_BINDING_HOST,
+            QUERY_LLM_BINDING_API_KEY,
+            KEYWORD_EXTRACTION_LLM_BINDING,
+            KEYWORD_EXTRACTION_LLM_MODEL,
+            KEYWORD_EXTRACTION_LLM_BINDING_HOST,
+            KEYWORD_EXTRACTION_LLM_BINDING_API_KEY,
+        )
+
+        # Task configurations: (task_name, binding_env, model_env, host_env, api_key_env, func_attr)
+        task_configs = [
+            ("entity_extraction", ENTITY_EXTRACTION_LLM_BINDING, ENTITY_EXTRACTION_LLM_MODEL,
+             ENTITY_EXTRACTION_LLM_BINDING_HOST, ENTITY_EXTRACTION_LLM_BINDING_API_KEY, "entity_extraction_llm_func"),
+            ("entity_summary", ENTITY_SUMMARY_LLM_BINDING, ENTITY_SUMMARY_LLM_MODEL,
+             ENTITY_SUMMARY_LLM_BINDING_HOST, ENTITY_SUMMARY_LLM_BINDING_API_KEY, "entity_summary_llm_func"),
+            ("relation_summary", RELATION_SUMMARY_LLM_BINDING, RELATION_SUMMARY_LLM_MODEL,
+             RELATION_SUMMARY_LLM_BINDING_HOST, RELATION_SUMMARY_LLM_BINDING_API_KEY, "relation_summary_llm_func"),
+            ("query", QUERY_LLM_BINDING, QUERY_LLM_MODEL,
+             QUERY_LLM_BINDING_HOST, QUERY_LLM_BINDING_API_KEY, "query_llm_func"),
+            ("keyword_extraction", KEYWORD_EXTRACTION_LLM_BINDING, KEYWORD_EXTRACTION_LLM_MODEL,
+             KEYWORD_EXTRACTION_LLM_BINDING_HOST, KEYWORD_EXTRACTION_LLM_BINDING_API_KEY, "keyword_extraction_llm_func"),
+        ]
+
+        for task_name, binding_env, model_env, host_env, api_key_env, func_attr in task_configs:
+            binding = os.getenv(binding_env)
+            if binding:
+                model = os.getenv(model_env)
+                host = os.getenv(host_env)
+                api_key = os.getenv(api_key_env)
+
+                # Create task-specific LLM function
+                llm_func = self._create_task_specific_llm_function(
+                    task_name, binding, model, host, api_key
+                )
+
+                if llm_func:
+                    setattr(self, func_attr, llm_func)
+                    logger.info(f"✅ Initialized {task_name} LLM: {binding}/{model}")
+
+    def _create_task_specific_llm_function(self, task_name: str, binding: str, model: str, host: str, api_key: str):
+        """Create a task-specific LLM function based on binding type."""
+        try:
+            if binding == "openai":
+                from .llm.openai import openai_complete_if_cache
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    return await openai_complete_if_cache(
+                        model=model or "gpt-4o-mini",
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        api_key=api_key,
+                        base_url=host,
+                        **kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "siliconflow":
+                from .llm.siliconcloud import siliconflow_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    # Remove conflicting parameters to avoid duplication
+                    clean_kwargs = {k: v for k, v in kwargs.items()
+                                  if k not in ['model', 'api_key', 'base_url']}
+                    return await siliconflow_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        model=model or "Qwen/Qwen2.5-7B-Instruct",
+                        api_key=api_key,
+                        base_url=host,
+                        **clean_kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "ollama":
+                from .llm.ollama import ollama_model_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    # Add required hashing_kv parameter for ollama
+                    kwargs["hashing_kv"] = self.llm_response_cache
+                    return await ollama_model_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        host=host or "http://localhost:11434",
+                        **kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "azure_openai":
+                from .llm.azure_openai import azure_openai_complete_if_cache
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    return await azure_openai_complete_if_cache(
+                        model=model or "gpt-4o-mini",
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        api_key=api_key,
+                        base_url=host,
+                        **kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "zhipu":
+                from .llm.zhipu import zhipu_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    return await zhipu_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        model=model or "glm-4-plus",
+                        api_key=api_key,
+                        **kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "gemini":
+                from .llm.gemini import gemini_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    return await gemini_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        model=model or "gemini-2.5-pro",
+                        api_key=api_key,
+                        **kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "openrouter":
+                from .llm.openrouter import openrouter_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    # Remove conflicting parameters to avoid duplication
+                    clean_kwargs = {k: v for k, v in kwargs.items()
+                                  if k not in ['model', 'api_key', 'base_url']}
+                    return await openrouter_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        model=model or "openai/gpt-4o-mini",
+                        api_key=api_key,
+                        base_url=host or "https://openrouter.ai/api/v1",
+                        **clean_kwargs
+                    )
+                return task_llm_func
+
+            elif binding == "lollms":
+                from .llm.lollms import lollms_model_complete
+                async def task_llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+                    # Add required hashing_kv parameter for lollms
+                    kwargs["hashing_kv"] = self.llm_response_cache
+                    # Set base_url for lollms
+                    kwargs["base_url"] = host or "http://localhost:9600"
+                    return await lollms_model_complete(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        history_messages=history_messages,
+                        **kwargs
+                    )
+                return task_llm_func
+
+            else:
+                logger.warning(f"Unknown LLM binding for {task_name}: {binding}")
+                return None
+
+        except ImportError as e:
+            logger.warning(f"Failed to import LLM binding {binding} for {task_name}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to create {task_name} LLM function: {e}")
+            return None
+
+    def get_task_llm_func(self, task_type: str):
+        """Get the appropriate LLM function for a specific task type."""
+        task_func_map = {
+            "entity_extraction": self.entity_extraction_llm_func,
+            "entity_summary": self.entity_summary_llm_func,
+            "relation_summary": self.relation_summary_llm_func,
+            "query_response": self.query_llm_func,
+            "keyword_extraction": self.keyword_extraction_llm_func,
+        }
+
+        # Return task-specific function if available, otherwise fall back to global function
+        return task_func_map.get(task_type) or self.llm_model_func

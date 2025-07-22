@@ -184,35 +184,47 @@ async def openrouter_complete_if_cache(
 
 # Generic OpenRouter completion function
 async def openrouter_complete(
-    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, model=None, api_key=None, base_url=None, **kwargs
 ) -> Union[str, AsyncIterator[str]]:
     """Generic OpenRouter completion function compatible with LightRAG interface"""
     if history_messages is None:
         history_messages = []
-    
+
     # Handle keyword extraction
     if keyword_extraction:
         kwargs["response_format"] = {"type": "json_object"}
-    
-    # Get model name from global config
-    hashing_kv = kwargs.get("hashing_kv")
-    if hashing_kv and hasattr(hashing_kv, 'global_config'):
-        model_name = hashing_kv.global_config.get("llm_model_name", "openai/gpt-4o-mini")
+
+    # Get model name from parameter, global config, or default
+    if model:
+        model_name = model
     else:
-        model_name = "openai/gpt-4o-mini"
-    
+        hashing_kv = kwargs.get("hashing_kv")
+        if hashing_kv and hasattr(hashing_kv, 'global_config'):
+            model_name = hashing_kv.global_config.get("llm_model_name", "openai/gpt-4o-mini")
+        else:
+            model_name = "openai/gpt-4o-mini"
+
+    # Remove conflicting parameters from kwargs to avoid duplication
+    conflicting_params = [
+        "model", "api_key", "base_url", "_priority", "hashing_kv",
+        "cache_type", "mode", "keyword_extraction"
+    ]
+    clean_kwargs = {k: v for k, v in kwargs.items() if k not in conflicting_params}
+
     result = await openrouter_complete_if_cache(
         model_name,
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
-        **kwargs,
+        api_key=api_key,
+        base_url=base_url,
+        **clean_kwargs,
     )
-    
+
     if keyword_extraction and isinstance(result, str):
         # Extract JSON from response for keyword extraction
         return locate_json_string_body_from_string(result)
-    
+
     return result
 
 
