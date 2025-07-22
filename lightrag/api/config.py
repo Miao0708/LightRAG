@@ -53,6 +53,10 @@ def get_default_host(binding_type: str) -> str:
         "lollms": os.getenv("LLM_BINDING_HOST", "http://localhost:9600"),
         "azure_openai": os.getenv("AZURE_OPENAI_ENDPOINT", "https://api.openai.com/v1"),
         "openai": os.getenv("LLM_BINDING_HOST", "https://api.openai.com/v1"),
+        "siliconflow": os.getenv("LLM_BINDING_HOST", "https://api.siliconflow.cn/v1"),
+        "zhipu": os.getenv("LLM_BINDING_HOST", "https://open.bigmodel.cn/api/paas/v4"),
+        "gemini": os.getenv("LLM_BINDING_HOST", "https://generativelanguage.googleapis.com/v1beta"),
+        "openrouter": os.getenv("LLM_BINDING_HOST", "https://openrouter.ai/api/v1"),
     }
     return default_hosts.get(
         binding_type, os.getenv("LLM_BINDING_HOST", "http://localhost:11434")
@@ -197,15 +201,30 @@ def parse_args() -> argparse.Namespace:
         "--llm-binding",
         type=str,
         default=get_env_value("LLM_BINDING", "ollama"),
-        choices=["lollms", "ollama", "openai", "openai-ollama", "azure_openai"],
+        choices=[
+            "lollms", "ollama", "openai", "openai-ollama", "azure_openai",
+            "siliconflow", "zhipu", "gemini", "openrouter"
+        ],
         help="LLM binding type (default: from env or ollama)",
     )
     parser.add_argument(
         "--embedding-binding",
         type=str,
         default=get_env_value("EMBEDDING_BINDING", "ollama"),
-        choices=["lollms", "ollama", "openai", "azure_openai"],
+        choices=[
+            "lollms", "ollama", "openai", "azure_openai",
+            "siliconflow", "zhipu", "gemini", "openrouter"
+        ],
         help="Embedding binding type (default: from env or ollama)",
+    )
+    parser.add_argument(
+        "--rerank-binding",
+        type=str,
+        default=get_env_value("RERANK_BINDING", "custom"),
+        choices=[
+            "custom", "jina", "cohere", "siliconflow", "openrouter"
+        ],
+        help="Rerank binding type (default: from env or custom)",
     )
 
     args = parser.parse_args()
