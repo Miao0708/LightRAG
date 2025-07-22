@@ -1,9 +1,8 @@
 import sys
+import asyncio
+import time
 
-if sys.version_info < (3, 9):
-    from typing import AsyncIterator
-else:
-    from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pipmaster as pm  # Pipmaster for dynamic library install
 
@@ -22,6 +21,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    before_sleep_log,
 )
 from lightrag.utils import (
     wrap_embedding_func_with_attrs,
@@ -49,12 +49,49 @@ class InvalidResponseError(Exception):
     pass
 
 
+# 全局速率限制跟踪器
+class RateLimitTracker:
+    def __init__(self):
+        self._last_rate_limit_time = 0
+        self._consecutive_rate_limits = 0
+        self._lock = asyncio.Lock()
+
+    async def record_rate_limit(self):
+        """记录速率限制事件"""
+        async with self._lock:
+            current_time = time.time()
+            # 如果距离上次速率限制不到60秒，认为是连续的
+            if current_time - self._last_rate_limit_time < 60:
+                self._consecutive_rate_limits += 1
+            else:
+                self._consecutive_rate_limits = 1
+            self._last_rate_limit_time = current_time
+
+            # 根据连续速率限制次数动态调整等待时间
+            if self._consecutive_rate_limits >= 3:
+                wait_time = min(120, 30 * self._consecutive_rate_limits)
+                logger.warning(f"连续 {self._consecutive_rate_limits} 次速率限制，等待 {wait_time} 秒")
+                await asyncio.sleep(wait_time)
+
+    async def reset_if_success(self):
+        """成功请求后重置计数器"""
+        async with self._lock:
+            if self._consecutive_rate_limits > 0:
+                logger.info("API 请求成功，重置速率限制计数器")
+                self._consecutive_rate_limits = 0
+
+
+# 全局实例
+_rate_limit_tracker = RateLimitTracker()
+
+
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
+    stop=stop_after_attempt(5),  # 增加重试次数
+    wait=wait_exponential(multiplier=2, min=10, max=120),  # 增加等待时间
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError)
     ),
+    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
 )
 async def siliconcloud_embedding(
     texts: list[str],
@@ -91,11 +128,12 @@ async def siliconcloud_embedding(
 
 # LLM text generation functions
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),  # 增加重试次数
+    wait=wait_exponential(multiplier=2, min=10, max=120),  # 增加等待时间，最长2分钟
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError, InvalidResponseError)
     ),
+    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
 )
 async def siliconflow_complete_if_cache(
     model,
@@ -166,16 +204,37 @@ async def siliconflow_complete_if_cache(
 
                 logger.debug(f"SiliconFlow response: {len(content)} characters")
 
+                # 成功请求后重置速率限制计数器
+                await _rate_limit_tracker.reset_if_success()
+
                 return content
 
+    except RateLimitError as e:
+        logger.error(f"SiliconFlow rate limit exceeded: {str(e)}")
+        logger.warning("SiliconFlow TPM 限制已达到，正在重试...")
+        # 记录速率限制事件
+        await _rate_limit_tracker.record_rate_limit()
+        # 重新抛出原始的 RateLimitError，让 tenacity 处理重试
+        raise e
+    except APIConnectionError as e:
+        logger.error(f"SiliconFlow connection error: {str(e)}")
+        raise e
+    except APITimeoutError as e:
+        logger.error(f"SiliconFlow timeout error: {str(e)}")
+        raise e
     except Exception as e:
         logger.error(f"SiliconFlow API request failed: {str(e)}")
-        if "rate limit" in str(e).lower():
-            raise RateLimitError(f"SiliconFlow rate limit exceeded: {e}")
+        # 检查是否是速率限制错误
+        if "rate limit" in str(e).lower() or "429" in str(e):
+            logger.warning("检测到速率限制错误，正在重试...")
+            # 记录速率限制事件
+            await _rate_limit_tracker.record_rate_limit()
+            # 创建一个通用的异常来触发重试
+            raise InvalidResponseError(f"Rate limit error: {e}")
         elif "connection" in str(e).lower():
-            raise APIConnectionError(f"SiliconFlow connection error: {e}")
+            raise InvalidResponseError(f"Connection error: {e}")
         elif "timeout" in str(e).lower():
-            raise APITimeoutError(f"SiliconFlow timeout error: {e}")
+            raise InvalidResponseError(f"Timeout error: {e}")
         else:
             raise InvalidResponseError(f"SiliconFlow API error: {e}")
 
@@ -210,11 +269,12 @@ async def siliconflow_complete(
 # Enhanced embedding function with OpenAI-compatible API
 @wrap_embedding_func_with_attrs(embedding_dim=1024, max_token_size=8192)
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),  # 增加重试次数
+    wait=wait_exponential(multiplier=2, min=10, max=120),  # 增加等待时间
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError, InvalidResponseError)
     ),
+    before_sleep=before_sleep_log(logger, "WARNING"),  # 添加重试前的日志
 )
 async def siliconflow_embed(
     texts, model="BAAI/bge-m3", base_url="https://api.siliconflow.cn/v1", api_key=None, **kwargs
@@ -250,16 +310,35 @@ async def siliconflow_embed(
 
             logger.debug(f"SiliconFlow embeddings generated: shape={result.shape}")
 
+            # 成功请求后重置速率限制计数器
+            await _rate_limit_tracker.reset_if_success()
+
             return result
 
+    except RateLimitError as e:
+        logger.error(f"SiliconFlow embedding rate limit exceeded: {str(e)}")
+        logger.warning("SiliconFlow embedding TPM 限制已达到，正在重试...")
+        # 记录速率限制事件
+        await _rate_limit_tracker.record_rate_limit()
+        raise e
+    except APIConnectionError as e:
+        logger.error(f"SiliconFlow embedding connection error: {str(e)}")
+        raise e
+    except APITimeoutError as e:
+        logger.error(f"SiliconFlow embedding timeout error: {str(e)}")
+        raise e
     except Exception as e:
         logger.error(f"SiliconFlow embedding request failed: {str(e)}")
-        if "rate limit" in str(e).lower():
-            raise RateLimitError(f"SiliconFlow embedding rate limit exceeded: {e}")
+        # 检查是否是速率限制错误
+        if "rate limit" in str(e).lower() or "429" in str(e):
+            logger.warning("检测到 embedding 速率限制错误，正在重试...")
+            # 记录速率限制事件
+            await _rate_limit_tracker.record_rate_limit()
+            raise InvalidResponseError(f"Embedding rate limit error: {e}")
         elif "connection" in str(e).lower():
-            raise APIConnectionError(f"SiliconFlow embedding connection error: {e}")
+            raise InvalidResponseError(f"Embedding connection error: {e}")
         elif "timeout" in str(e).lower():
-            raise APITimeoutError(f"SiliconFlow embedding timeout error: {e}")
+            raise InvalidResponseError(f"Embedding timeout error: {e}")
         else:
             raise InvalidResponseError(f"SiliconFlow embedding API error: {e}")
 
