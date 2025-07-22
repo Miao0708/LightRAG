@@ -16,6 +16,7 @@ from openai import (
     APIConnectionError,
     RateLimitError,
     APITimeoutError,
+    APIStatusError,
 )
 from tenacity import (
     retry,
@@ -49,8 +50,8 @@ class InvalidResponseError(Exception):
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),  # 增加重试次数
+    wait=wait_exponential(multiplier=2, min=15, max=120),  # 增加等待时间，最长2分钟
     retry=(
         retry_if_exception_type(RateLimitError)
         | retry_if_exception_type(APIConnectionError)
@@ -163,16 +164,22 @@ async def openrouter_complete_if_cache(
                 
                 return content
                 
+    except RateLimitError as e:
+        logger.error(f"OpenRouter rate limit exceeded: {str(e)}")
+        logger.warning("免费模型 qwen/qwen3-235b-a22b-07-25:free 每分钟限制5次请求")
+        logger.info("建议：1) 等待1分钟后重试 2) 考虑使用付费模型 3) 降低并发数")
+        # 重新抛出原始的 RateLimitError
+        raise e
+    except APIConnectionError as e:
+        logger.error(f"OpenRouter connection error: {str(e)}")
+        raise e
+    except APITimeoutError as e:
+        logger.error(f"OpenRouter timeout error: {str(e)}")
+        raise e
     except Exception as e:
         logger.error(f"OpenRouter API request failed: {str(e)}")
-        if "rate limit" in str(e).lower():
-            raise RateLimitError(f"OpenRouter rate limit exceeded: {e}")
-        elif "connection" in str(e).lower():
-            raise APIConnectionError(f"OpenRouter connection error: {e}")
-        elif "timeout" in str(e).lower():
-            raise APITimeoutError(f"OpenRouter timeout error: {e}")
-        else:
-            raise InvalidResponseError(f"OpenRouter API error: {e}")
+        # 对于其他错误，创建一个通用的异常
+        raise Exception(f"OpenRouter API error: {e}")
 
 
 # Generic OpenRouter completion function
