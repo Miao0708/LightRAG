@@ -1,408 +1,430 @@
 # LightRAG 架构分析
 
-## 整体架构
+## 整体架构概览
 
-```mermaid
-graph TB
-    subgraph "用户层"
-        A[Web UI] 
-        B[REST API]
-        C[Python SDK]
-    end
-    
-    subgraph "应用层"
-        D[LightRAG Core]
-        E[Query Engine]
-        F[Document Processor]
-    end
-    
-    subgraph "服务层"
-        G[LLM Service]
-        H[Embedding Service]
-        I[Rerank Service]
-    end
-    
-    subgraph "存储层"
-        J[KV Storage]
-        K[Vector Storage]
-        L[Graph Storage]
-        M[Doc Status Storage]
-    end
-    
-    A --> D
-    B --> D
-    C --> D
-    
-    D --> E
-    D --> F
-    
-    E --> G
-    E --> H
-    E --> I
-    
-    F --> G
-    F --> H
-    
-    D --> J
-    D --> K
-    D --> L
-    D --> M
-```
+LightRAG 采用分层架构设计，从用户接口到存储实现共分为6个主要层次，每层职责清晰，接口标准化，支持灵活的组件替换和扩展。
 
-## 核心组件详解
+## 1. 用户接口层 (User Interface Layer)
 
-### 1. 文档处理流水线
+### 1.1 Web UI
+- **功能**: 提供可视化的文档管理和图谱探索界面
+- **特点**: 支持文档上传、知识图谱可视化、查询测试
+- **技术**: 基于现代前端框架，集成图谱可视化组件
 
-```mermaid
-flowchart TD
-    A[原始文档] --> B[文档解析]
-    B --> C[文本分块]
-    C --> D[实体提取]
-    D --> E[关系识别]
-    E --> F[向量化]
-    F --> G[存储更新]
-    
-    subgraph "分块策略"
-        C1[Token 大小: 1200]
-        C2[重叠大小: 100]
-        C3[智能边界检测]
-    end
-    
-    subgraph "实体提取"
-        D1[LLM 驱动提取]
-        D2[实体消歧]
-        D3[类型识别]
-    end
-    
-    subgraph "关系建模"
-        E1[实体间关系]
-        E2[权重计算]
-        E3[语义相似度]
-    end
-    
-    C --> C1
-    C --> C2
-    C --> C3
-    
-    D --> D1
-    D --> D2
-    D --> D3
-    
-    E --> E1
-    E --> E2
-    E --> E3
-```
+### 1.2 REST API
+- **功能**: 标准的HTTP API接口，支持文档管理、查询、图谱操作
+- **端点**: `/documents/*`, `/query/*`, `/graphs/*`
+- **特点**: RESTful设计，支持批量操作和流式响应
 
-### 2. 双层检索机制
+### 1.3 Ollama兼容API
+- **功能**: 兼容Ollama聊天API格式，便于集成到现有AI应用
+- **特点**: 支持聊天模式，自动路由到LightRAG查询引擎
+- **应用**: 可直接接入Open WebUI等聊天界面
 
-```mermaid
-graph TD
-    A[用户查询] --> B[关键词提取]
-    B --> C{检索模式}
-    
-    C -->|Local| D[实体检索]
-    C -->|Global| E[关系检索]
-    C -->|Hybrid| F[混合检索]
-    C -->|Mix| G[图谱+向量检索]
-    C -->|Naive| H[纯向量检索]
-    
-    D --> D1[高层关键词]
-    D --> D2[低层关键词]
-    D1 --> D3[实体匹配]
-    D2 --> D3
-    D3 --> I[上下文构建]
-    
-    E --> E1[关系模式识别]
-    E1 --> E2[关系路径搜索]
-    E2 --> I
-    
-    F --> D
-    F --> E
-    
-    G --> J[知识图谱检索]
-    G --> K[向量相似度检索]
-    J --> I
-    K --> I
-    
-    H --> K
-    
-    I --> L[LLM 生成答案]
-```
+### 1.4 Core API (Python SDK)
+- **功能**: Python原生API，提供最完整的功能访问
+- **特点**: 异步支持，类型提示，灵活配置
+- **适用**: 嵌入式应用、研究开发、高级定制
 
-### 3. 存储架构设计
+## 2. API服务层 (API Service Layer)
 
-```mermaid
-erDiagram
-    KV_STORAGE {
-        string key
-        json value
-        timestamp created_at
-        timestamp updated_at
-    }
-    
-    VECTOR_STORAGE {
-        string id
-        vector embedding
-        json metadata
-        float similarity_score
-    }
-    
-    GRAPH_STORAGE {
-        string entity_id
-        string entity_name
-        string entity_type
-        json properties
-        string relation_id
-        string source_id
-        string target_id
-        string relation_type
-        float weight
-    }
-    
-    DOC_STATUS {
-        string doc_id
-        string status
-        json metadata
-        timestamp processed_at
-    }
-    
-    KV_STORAGE ||--o{ VECTOR_STORAGE : "references"
-    GRAPH_STORAGE ||--o{ VECTOR_STORAGE : "embedded"
-    DOC_STATUS ||--o{ KV_STORAGE : "tracks"
-```
+### 2.1 FastAPI服务器
+- **核心文件**: `lightrag/api/lightrag_server.py`
+- **功能**: HTTP服务器，路由管理，中间件集成
+- **特点**: 高性能异步处理，自动API文档生成
 
-## 关键算法流程
+### 2.2 认证中间件
+- **支持方式**:
+  - API Key认证
+  - JWT账户认证 (HS256算法)
+  - 白名单路径配置
+- **安全特性**: Token过期管理，角色权限控制
 
-### 1. 实体关系提取算法
+### 2.3 文档管理器
+- **功能**: 文档上传、扫描、状态跟踪
+- **特点**: 支持多种文件格式，批量处理，增量更新
+- **监控**: 实时处理状态，错误处理和重试机制
 
-```mermaid
-sequenceDiagram
-    participant D as Document
-    participant C as Chunker
-    participant L as LLM
-    participant E as Entity Store
-    participant R as Relation Store
-    
-    D->>C: 输入文档
-    C->>C: 文本分块
-    loop 每个文本块
-        C->>L: 实体提取请求
-        L->>L: 分析文本内容
-        L->>E: 返回实体列表
-        C->>L: 关系提取请求
-        L->>R: 返回关系列表
-    end
-    E->>E: 实体去重合并
-    R->>R: 关系权重计算
-```
+## 3. 核心处理层 (Core Processing Layer)
 
-### 2. 查询处理算法
+### 3.1 LightRAG核心类
+- **核心文件**: `lightrag/lightrag.py`
+- **功能**: 系统总控制器，协调各个组件协同工作
+- **特点**:
+  - 异步处理支持
+  - 配置驱动的组件初始化
+  - 统一的错误处理和日志记录
+  - 存储状态自动管理
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant Q as Query Engine
-    participant K as Keyword Extractor
-    participant G as Graph Store
-    participant V as Vector Store
-    participant L as LLM
-    
-    U->>Q: 用户查询
-    Q->>K: 关键词提取
-    K->>Q: 高低层关键词
-    
-    par 并行检索
-        Q->>G: 图谱检索
-        G->>Q: 相关实体关系
-    and
-        Q->>V: 向量检索
-        V->>Q: 相似文本块
-    end
-    
-    Q->>Q: 上下文整合
-    Q->>L: 生成最终答案
-    L->>U: 返回结果
-```
+### 3.2 文档处理管道
+- **管道方法**: `apipeline_*` 系列方法
+- **处理流程**:
+  1. **文档入队**: `apipeline_enqueue_documents`
+  2. **分块处理**: `chunking_by_token_size`
+  3. **实体抽取**: `extract_entities`
+  4. **关系抽取**: `merge_nodes_and_edges`
+  5. **向量化**: 嵌入函数处理
+  6. **存储更新**: 批量写入各存储后端
 
-## 性能优化策略
+### 3.3 查询处理引擎
+- **核心文件**: `lightrag/operate.py`
+- **查询模式**:
+  - **Local模式**: 基于实体邻域的局部查询
+  - **Global模式**: 基于全局图谱的推理查询
+  - **Hybrid模式**: 结合Local和Global的混合查询
+  - **Mix模式**: 图谱检索+向量检索的融合
+  - **Naive模式**: 纯向量相似度检索
 
-### 1. 缓存机制
+### 3.4 知识图谱构建
+- **实体抽取**: 使用LLM从文本块中识别实体
+- **关系识别**: 分析实体间的语义关系
+- **图谱合并**: 去重、消歧、权重计算
+- **增量更新**: 支持新文档的增量图谱构建
 
-```mermaid
-graph LR
-    A[查询请求] --> B{LLM 缓存}
-    B -->|命中| C[返回缓存结果]
-    B -->|未命中| D[LLM 处理]
-    D --> E[更新缓存]
-    E --> F[返回结果]
-    
-    G[嵌入请求] --> H{嵌入缓存}
-    H -->|命中| I[返回缓存向量]
-    H -->|未命中| J[嵌入计算]
-    J --> K[更新缓存]
-    K --> L[返回向量]
-```
+## 4. LLM集成层 (LLM Integration Layer)
 
-### 2. 并发处理
+### 4.1 LLM路由器
+- **核心文件**: `lightrag/llm.py`
+- **功能**: 统一的LLM调用接口，支持多模型切换
+- **特点**:
+  - 模型故障转移
+  - 负载均衡
+  - 统一的参数标准化
 
-```mermaid
-graph TD
-    A[文档批处理] --> B[并发控制器]
-    B --> C[Worker 1]
-    B --> D[Worker 2]
-    B --> E[Worker N]
-    
-    C --> F[实体提取]
-    D --> G[关系提取]
-    E --> H[向量化]
-    
-    F --> I[结果聚合]
-    G --> I
-    H --> I
-    
-    I --> J[存储更新]
-```
+### 4.2 支持的LLM提供商
+- **OpenAI**: `lightrag/llm/openai.py`
+  - GPT-4, GPT-3.5系列
+  - 支持流式响应
+  - 自动重试和错误处理
+- **Ollama**: `lightrag/llm/ollama.py`
+  - 本地模型部署
+  - 支持多种开源模型
+  - 低延迟本地推理
+- **Azure OpenAI**: `lightrag/llm/azure_openai.py`
+  - 企业级部署
+  - 数据隐私保护
+  - 区域化服务
+- **LlamaIndex**: `lightrag/llm/llama_index_impl.py`
+  - 统一的多提供商接口
+  - 丰富的模型生态
 
-## 扩展性设计
+### 4.3 嵌入和重排序
+- **嵌入函数**: `EmbeddingFunc`类型
+  - 支持多种嵌入模型
+  - 批量处理优化
+  - 缓存机制
+- **重排序函数**: `rerank_model_func`
+  - 提高检索精度
+  - 支持多种重排序模型
+  - 可选启用
 
-### 1. 插件化架构
+## 5. 存储抽象层 (Storage Abstraction Layer)
 
-```mermaid
-graph TD
-    A[LightRAG Core] --> B[LLM 插件接口]
-    A --> C[存储插件接口]
-    A --> D[嵌入插件接口]
-    
-    B --> B1[OpenAI Plugin]
-    B --> B2[Ollama Plugin]
-    B --> B3[HuggingFace Plugin]
-    
-    C --> C1[PostgreSQL Plugin]
-    C --> C2[Neo4j Plugin]
-    C --> C3[MongoDB Plugin]
-    
-    D --> D1[OpenAI Embedding]
-    D --> D2[BGE Embedding]
-    D --> D3[Custom Embedding]
-```
+### 5.1 存储基类设计
+- **BaseKVStorage**: 键值存储抽象基类
+  - 支持批量读写操作
+  - 键过滤和存在性检查
+  - 命名空间隔离
+- **BaseVectorStorage**: 向量存储抽象基类
+  - 向量相似度查询
+  - 批量向量插入更新
+  - 元数据过滤支持
+- **BaseGraphStorage**: 图存储抽象基类
+  - 图结构操作
+  - 子图查询
+  - 图遍历算法
+- **DocStatusStorage**: 文档状态存储
+  - 处理状态跟踪
+  - 状态统计查询
+  - 批量状态更新
 
-### 2. 水平扩展支持
+### 5.2 命名空间管理
+- **StorageNameSpace**: 存储命名空间基类
+- **功能**:
+  - 多租户数据隔离
+  - 工作空间管理
+  - 存储生命周期管理
+- **特点**:
+  - 异步初始化和清理
+  - 统一的配置管理
+  - 存储状态监控
 
-```mermaid
-graph TB
-    subgraph "负载均衡层"
-        A[Load Balancer]
-    end
-    
-    subgraph "应用层集群"
-        B[LightRAG Instance 1]
-        C[LightRAG Instance 2]
-        D[LightRAG Instance N]
-    end
-    
-    subgraph "存储层集群"
-        E[PostgreSQL Cluster]
-        F[Neo4j Cluster]
-        G[Vector DB Cluster]
-    end
-    
-    A --> B
-    A --> C
-    A --> D
-    
-    B --> E
-    B --> F
-    B --> G
-    
-    C --> E
-    C --> F
-    C --> G
-    
-    D --> E
-    D --> F
-    D --> G
-```
+## 6. 存储实现层 (Storage Implementation Layer)
 
-## 配置管理
+### 6.1 JSON存储实现
+- **JsonKVStorage**: 基于JSON文件的键值存储
+  - 适用于小规模数据和开发测试
+  - 简单易用，无外部依赖
+  - 支持原子性写入
+- **JsonDocStatusStorage**: JSON文档状态存储
+  - 文档处理状态持久化
+  - 支持状态查询和统计
 
-### 1. 环境变量配置
+### 6.2 向量数据库实现
+- **NanoVectorDBStorage**: 内置轻量级向量数据库
+  - 纯Python实现，无外部依赖
+  - 支持余弦相似度搜索
+  - 适合中小规模应用
+- **ChromaVectorDBStorage**: Chroma向量数据库
+  - 高性能向量检索
+  - 丰富的元数据过滤
+  - 支持持久化存储
+- **MilvusVectorDBStorage**: Milvus向量数据库
+  - 企业级向量数据库
+  - 支持大规模向量检索
+  - 分布式部署支持
 
-```mermaid
-graph LR
-    A[环境配置] --> B[LLM 配置]
-    A --> C[存储配置]
-    A --> D[性能配置]
-    
-    B --> B1[API_KEY]
-    B --> B2[BASE_URL]
-    B --> B3[MODEL_NAME]
-    
-    C --> C1[DATABASE_URL]
-    C --> C2[VECTOR_DB_URL]
-    C --> C3[GRAPH_DB_URL]
-    
-    D --> D1[MAX_ASYNC]
-    D --> D2[BATCH_SIZE]
-    D --> D3[CACHE_SIZE]
-```
+### 6.3 图数据库实现
+- **NetworkXStorage**: 基于NetworkX的内存图存储
+  - 纯Python实现
+  - 丰富的图算法支持
+  - 适合中小规模图谱
+- **Neo4jStorage**: Neo4j图数据库
+  - 专业图数据库
+  - 强大的图查询语言(Cypher)
+  - 支持大规模图数据
+- **MemgraphStorage**: Memgraph图数据库
+  - 高性能内存图数据库
+  - 实时图分析
+  - 流处理支持
 
-### 2. 运行时配置
+### 6.4 关系数据库实现
+- **PostgreSQL系列**:
+  - `PGKVStorage`: PostgreSQL键值存储
+  - `PGVectorStorage`: PostgreSQL向量存储(pgvector扩展)
+  - `PGGraphStorage`: PostgreSQL图存储
+  - `PGDocStatusStorage`: PostgreSQL文档状态存储
+  - 特点: 统一的关系数据库解决方案，ACID事务支持
+- **MongoDB系列**:
+  - `MongoKVStorage`: MongoDB键值存储
+  - `MongoVectorStorage`: MongoDB向量存储
+  - `MongoGraphStorage`: MongoDB图存储
+  - `MongoDocStatusStorage`: MongoDB文档状态存储
+  - 特点: 文档数据库，灵活的数据模型
+- **Redis系列**:
+  - `RedisKVStorage`: Redis键值存储
+  - `RedisDocStatusStorage`: Redis文档状态存储
+  - 特点: 高性能内存数据库，适合缓存和会话存储
 
-```mermaid
-graph TD
-    A[LightRAG 初始化] --> B[配置验证]
-    B --> C[存储初始化]
-    C --> D[服务启动]
-    
-    B --> B1[检查必需参数]
-    B --> B2[验证模型可用性]
-    B --> B3[测试存储连接]
-    
-    C --> C1[创建存储实例]
-    C --> C2[建立连接池]
-    C --> C3[初始化索引]
-```
+## 7. 工具和配置层 (Utilities and Configuration Layer)
 
-## 监控与调试
+### 7.1 配置管理
+- **核心文件**: `lightrag/api/config.py`
+- **功能**:
+  - 环境变量解析
+  - 命令行参数处理
+  - 配置验证和默认值
+  - 动态配置更新
+- **配置类别**:
+  - LLM配置 (模型、API密钥、超参数)
+  - 存储配置 (连接字符串、认证信息)
+  - 性能配置 (并发数、批处理大小、缓存设置)
+  - 安全配置 (认证、授权、加密)
 
-### 1. 日志系统
+### 7.2 工具函数
+- **核心文件**: `lightrag/utils.py`
+- **主要功能**:
+  - 日志系统设置和管理
+  - 异步事件循环管理
+  - 文本处理和分词工具
+  - 哈希和编码工具
+  - 环境变量解析工具
+  - 性能监控和统计工具
 
-```mermaid
-graph LR
-    A[应用日志] --> B[日志收集器]
-    B --> C[日志处理]
-    C --> D[存储/展示]
-    
-    A --> A1[INFO 级别]
-    A --> A2[DEBUG 级别]
-    A --> A3[ERROR 级别]
-    
-    D --> D1[文件存储]
-    D --> D2[ELK Stack]
-    D --> D3[监控面板]
-```
+### 7.3 共享存储管理
+- **核心文件**: `lightrag/kg/shared_storage.py`
+- **功能**:
+  - 命名空间数据管理
+  - 管道状态锁管理
+  - 图数据库锁管理
+  - 进程间状态同步
+- **特点**:
+  - 支持多进程并发处理
+  - 防止数据竞争和冲突
+  - 管道状态持久化
 
-### 2. 性能监控
+### 7.4 管道状态管理
+- **功能**: 文档处理管道的状态跟踪和管理
+- **状态类型**:
+  - `NOT_STARTED`: 未开始处理
+  - `PROCESSING`: 正在处理中
+  - `COMPLETED`: 处理完成
+  - `FAILED`: 处理失败
+- **特点**: 支持断点续传和错误恢复
 
-```mermaid
-graph TD
-    A[性能指标] --> B[响应时间]
-    A --> C[吞吐量]
-    A --> D[资源使用]
-    A --> E[错误率]
-    
-    B --> B1[查询延迟]
-    B --> B2[索引时间]
-    
-    C --> C1[QPS]
-    C --> C2[并发数]
-    
-    D --> D1[CPU 使用率]
-    D --> D2[内存占用]
-    D --> D3[存储空间]
-    
-    E --> E1[LLM 调用失败]
-    E --> E2[存储连接错误]
-```
+## 8. 关键数据流程
 
-这个架构分析展示了 LightRAG 的核心设计理念和实现细节，为深入理解和使用该系统提供了全面的技术视角。
+### 8.1 文档处理流程
+1. **文档输入**: 支持文本、文件上传、批量导入
+2. **格式解析**: 自动识别和转换文档格式
+3. **文本分块**: 基于Token大小的智能分块
+4. **并行处理**:
+   - 实体抽取 (LLM驱动)
+   - 关系抽取 (LLM驱动)
+   - 文本向量化 (嵌入模型)
+5. **知识图谱构建**: 实体关系合并、去重、权重计算
+6. **存储更新**: 批量写入各存储后端
+7. **状态跟踪**: 更新文档处理状态
+
+### 8.2 查询处理流程
+1. **查询解析**: 自然语言查询预处理
+2. **模式选择**: 根据查询类型选择检索模式
+3. **并行检索**:
+   - 向量相似度检索 (文本块、实体、关系)
+   - 图谱遍历检索 (多跳推理)
+4. **上下文整合**: 去重、排序、截断
+5. **答案生成**: LLM基于上下文生成回答
+6. **流式输出**: 支持实时流式响应
+
+### 8.3 存储数据模型
+- **full_docs**: 完整文档内容和元数据
+- **text_chunks**: 文档分块和索引信息
+- **entities**: 实体信息和描述
+- **relationships**: 实体关系和权重
+- **doc_status**: 文档处理状态跟踪
+- **llm_response_cache**: LLM响应缓存
+
+## 9. 性能优化策略
+
+### 9.1 缓存机制
+- **LLM响应缓存**:
+  - 基于输入哈希的缓存键
+  - 支持实体抽取和关系抽取缓存
+  - 可配置缓存启用/禁用
+- **向量缓存**:
+  - 嵌入结果缓存
+  - 减少重复计算开销
+- **查询结果缓存**:
+  - 相似查询结果复用
+  - 提高响应速度
+
+### 9.2 并发处理优化
+- **异步处理**: 全面采用async/await模式
+- **批量操作**:
+  - 批量文档处理
+  - 批量向量计算
+  - 批量存储写入
+- **并发控制**:
+  - 可配置的最大并发数
+  - 资源池管理
+  - 背压控制
+
+### 9.3 存储优化
+- **索引优化**:
+  - 向量索引加速检索
+  - 图索引优化遍历
+  - 文本索引支持全文搜索
+- **数据压缩**:
+  - 向量量化
+  - 文本压缩存储
+- **分区策略**:
+  - 按时间分区
+  - 按主题分区
+  - 负载均衡
+
+## 10. 扩展性设计
+
+### 10.1 插件化架构
+- **LLM插件系统**:
+  - 统一的LLM接口标准
+  - 支持自定义LLM实现
+  - 热插拔模型切换
+- **存储插件系统**:
+  - 标准化存储接口
+  - 支持自定义存储后端
+  - 存储迁移工具
+- **嵌入插件系统**:
+  - 多种嵌入模型支持
+  - 自定义嵌入函数
+  - 嵌入模型版本管理
+
+### 10.2 水平扩展支持
+- **无状态设计**:
+  - 应用层无状态
+  - 状态存储在外部存储系统
+  - 支持多实例部署
+- **负载均衡**:
+  - API层负载均衡
+  - 存储层读写分离
+  - 智能路由策略
+- **分布式存储**:
+  - 支持分布式数据库
+  - 数据分片和复制
+  - 故障转移机制
+
+### 10.3 配置驱动扩展
+- **动态配置**:
+  - 运行时配置更新
+  - 配置热重载
+  - 配置版本管理
+- **环境适配**:
+  - 开发/测试/生产环境配置
+  - 容器化部署支持
+  - 云原生架构适配
+
+## 11. 监控与调试
+
+### 11.1 日志系统
+- **分级日志**:
+  - DEBUG: 详细调试信息
+  - INFO: 一般信息记录
+  - WARNING: 警告信息
+  - ERROR: 错误信息
+  - CRITICAL: 严重错误
+- **日志配置**:
+  - 可配置日志级别
+  - 文件轮转和大小限制
+  - 结构化日志输出
+- **日志内容**:
+  - 请求响应时间
+  - LLM调用统计
+  - 存储操作记录
+  - 错误堆栈跟踪
+
+### 11.2 性能监控
+- **关键指标**:
+  - 查询响应时间
+  - 文档处理速度
+  - LLM调用延迟
+  - 存储操作性能
+- **资源监控**:
+  - CPU和内存使用率
+  - 存储空间占用
+  - 网络I/O统计
+  - 并发连接数
+- **业务指标**:
+  - 文档处理成功率
+  - 查询准确性评估
+  - 用户满意度指标
+
+### 11.3 健康检查
+- **服务健康**:
+  - API服务可用性
+  - 存储连接状态
+  - LLM服务状态
+- **数据健康**:
+  - 数据一致性检查
+  - 索引完整性验证
+  - 缓存命中率统计
+
+## 12. 架构优势总结
+
+### 12.1 设计优势
+- **分层清晰**: 6层架构，职责分明，易于维护
+- **接口标准**: 统一的抽象接口，支持组件替换
+- **异步优先**: 全面异步设计，高并发性能
+- **插件化**: 支持自定义扩展，生态友好
+
+### 12.2 技术优势
+- **多模型支持**: 支持多种LLM和嵌入模型
+- **多存储后端**: 从轻量级到企业级的存储选择
+- **智能检索**: 多模式检索，精确度高
+- **增量更新**: 支持实时数据更新，无需重建
+
+### 12.3 运维优势
+- **配置驱动**: 环境变量和配置文件驱动
+- **监控完善**: 全面的日志和性能监控
+- **部署灵活**: 支持单机到分布式部署
+- **故障恢复**: 断点续传和错误重试机制
+
+这个架构分析展示了LightRAG作为现代RAG系统的先进设计理念，为理解、使用和扩展该系统提供了全面的技术指导。
