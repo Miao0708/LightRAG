@@ -79,6 +79,19 @@
 
 </details>
 
+## 📚 Documentation
+
+### 🎯 Quick Navigation
+
+| **Getting Started** | **Configuration** | **Advanced Topics** |
+|---------------------|-------------------|---------------------|
+| [📖 Project Overview](./docs/01-project-overview.md) | [🔧 LLM Configuration](./docs/05-llm-configuration.md) | [📊 Query Modes Analysis](./docs/09-query-modes-analysis.md) |
+| [🏗️ Architecture Guide](./docs/02-architecture-guide.md) | [🐳 Docker Deployment](./docs/13-docker-deployment.md) | [🔄 Rerank Integration](./docs/12-rerank-integration.md) |
+
+**📋 [Complete Documentation Index](./docs/README.md)** - Browse all available documentation with detailed navigation.
+
+---
+
 ## Installation
 
 ### Install LightRAG Server

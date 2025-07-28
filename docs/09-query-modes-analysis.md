@@ -1,8 +1,34 @@
 # LightRAG 查询模式深度解析
 
-## 概述
+## 📋 概述
 
 LightRAG 提供了 6 种不同的查询模式，每种模式都有其独特的检索策略和适用场景。本文档详细分析了每种模式的工作原理、性能特点和最佳使用场景。
+
+```mermaid
+graph TB
+    A[用户查询] --> B{选择查询模式}
+    
+    B -->|快速检索| C[Naive 模式]
+    B -->|实体聚焦| D[Local 模式]
+    B -->|全局推理| E[Global 模式]
+    B -->|混合策略| F[Hybrid 模式]
+    B -->|融合检索| G[Mix 模式]
+    B -->|自定义| H[Custom 模式]
+    
+    C --> I[向量检索]
+    D --> J[实体邻域检索]
+    E --> K[全局图谱推理]
+    F --> L[Local + Global]
+    G --> M[图谱 + 向量]
+    H --> N[用户定义逻辑]
+    
+    I --> O[快速响应<br/>低精度]
+    J --> P[中等响应<br/>中精度]
+    K --> Q[慢响应<br/>高精度]
+    L --> R[平衡响应<br/>高精度]
+    G --> S[最佳响应<br/>最高精度]
+    N --> T[自定义响应]
+```
 
 ## 🤖 模型使用架构
 
@@ -51,6 +77,24 @@ query_param.model_func > query_llm_func > llm_model_func
 
 **特点**: 基于实体邻域的局部推理
 
+```mermaid
+flowchart TD
+    A[用户查询] --> B[LLM提取低级关键词]
+    B --> C[实体向量搜索]
+    C --> D[获取相关实体]
+    D --> E[图谱邻域查询]
+    E --> F[获取实体关系]
+    F --> G[计算实体重要性]
+    G --> H[构建局部上下文]
+    H --> I[LLM生成响应]
+    
+    D --> D1[entity_vdb.query()]
+    E --> E1[knowledge_graph.get_nodes_batch()]
+    F --> F1[knowledge_graph.get_edges()]
+    G --> G1[node_degrees_batch()]
+    H --> H1[context_builder()]
+```
+
 **工作流程**:
 ```
 用户查询 → LLM提取低级关键词 → 实体向量搜索 → 图谱邻域查询 → 构建局部上下文 → LLM生成响应
@@ -75,6 +119,24 @@ query_param.model_func > query_llm_func > llm_model_func
 ### 3. Global模式 - 全局关系检索
 
 **特点**: 基于全局关系网络的推理
+
+```mermaid
+flowchart TD
+    A[用户查询] --> B[LLM提取高级关键词]
+    B --> C[关系向量搜索]
+    C --> D[获取相关关系]
+    D --> E[全局图谱分析]
+    E --> F[关系权重计算]
+    F --> G[实体重要性评估]
+    G --> H[构建全局上下文]
+    H --> I[LLM推理生成]
+    
+    D --> D1[relation_vdb.query()]
+    E --> E1[knowledge_graph.global_analysis()]
+    F --> F1[edge_degrees_batch()]
+    G --> G1[entity_importance_batch()]
+    H --> H1[global_context_builder()]
+```
 
 **工作流程**:
 ```
