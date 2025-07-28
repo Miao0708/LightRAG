@@ -31,6 +31,8 @@ from lightrag.constants import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_COSINE_THRESHOLD,
     DEFAULT_RELATED_CHUNK_NUMBER,
+    DEFAULT_MIN_RERANK_SCORE,
+    DEFAULT_SUMMARY_MAX_TOKENS,
 )
 from lightrag.utils import get_env_value
 
@@ -38,6 +40,12 @@ from lightrag.kg import (
     STORAGES,
     verify_storage_implementation,
 )
+
+# Import for type annotation
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lightrag.api.config import OllamaServerInfos
 
 from lightrag.kg.shared_storage import (
     get_namespace_data,
@@ -269,7 +277,9 @@ class LightRAG:
     llm_model_name: str = field(default="gpt-4o-mini")
     """Name of the LLM model used for generating responses."""
 
-    llm_model_max_token_size: int = field(default=int(os.getenv("MAX_TOKENS", 32000)))
+    summary_max_tokens: int = field(
+        default=int(os.getenv("MAX_TOKENS", DEFAULT_SUMMARY_MAX_TOKENS))
+    )
     """Maximum number of tokens allowed per LLM response."""
 
     llm_model_max_async: int = field(default=int(os.getenv("MAX_ASYNC", 4)))
@@ -301,6 +311,11 @@ class LightRAG:
 
     rerank_model_func: Callable[..., object] | None = field(default=None)
     """Function for reranking retrieved documents. All rerank configurations (model name, API keys, top_k, etc.) should be included in this function. Optional."""
+
+    min_rerank_score: float = field(
+        default=get_env_value("MIN_RERANK_SCORE", DEFAULT_MIN_RERANK_SCORE, float)
+    )
+    """Minimum rerank score threshold for filtering chunks after reranking."""
 
     # Storage
     # ---
@@ -350,6 +365,9 @@ class LightRAG:
     cosine_better_than_threshold: float = field(
         default=float(os.getenv("COSINE_THRESHOLD", 0.2))
     )
+
+    ollama_server_infos: Optional["OllamaServerInfos"] = field(default=None)
+    """Configuration for Ollama server information."""
 
     _storages_status: StoragesStatus = field(default=StoragesStatus.NOT_CREATED)
 
@@ -411,6 +429,12 @@ class LightRAG:
                 self.tokenizer = TiktokenTokenizer(self.tiktoken_model_name)
             else:
                 self.tokenizer = TiktokenTokenizer()
+
+        # Initialize ollama_server_infos if not provided
+        if self.ollama_server_infos is None:
+            from lightrag.api.config import OllamaServerInfos
+
+            self.ollama_server_infos = OllamaServerInfos()
 
         # Fix global_config now
         global_config = asdict(self)
@@ -569,7 +593,7 @@ class LightRAG:
             await asyncio.gather(*tasks)
 
             self._storages_status = StoragesStatus.INITIALIZED
-            logger.debug("Initialized Storages")
+            logger.debug("All storage types initialized")
 
     async def finalize_storages(self):
         """Asynchronously finalize the storages"""
@@ -626,9 +650,28 @@ class LightRAG:
         )
 
     def _get_storage_class(self, storage_name: str) -> Callable[..., Any]:
-        import_path = STORAGES[storage_name]
-        storage_class = lazy_external_import(import_path, storage_name)
-        return storage_class
+        # Direct imports for default storage implementations
+        if storage_name == "JsonKVStorage":
+            from lightrag.kg.json_kv_impl import JsonKVStorage
+
+            return JsonKVStorage
+        elif storage_name == "NanoVectorDBStorage":
+            from lightrag.kg.nano_vector_db_impl import NanoVectorDBStorage
+
+            return NanoVectorDBStorage
+        elif storage_name == "NetworkXStorage":
+            from lightrag.kg.networkx_impl import NetworkXStorage
+
+            return NetworkXStorage
+        elif storage_name == "JsonDocStatusStorage":
+            from lightrag.kg.json_doc_status_impl import JsonDocStatusStorage
+
+            return JsonDocStatusStorage
+        else:
+            # Fallback to dynamic import for other storage implementations
+            import_path = STORAGES[storage_name]
+            storage_class = lazy_external_import(import_path, storage_name)
+            return storage_class
 
     def insert(
         self,

@@ -54,8 +54,6 @@ LLM_BINDING=openai
 LLM_MODEL=gpt-4o
 LLM_BINDING_HOST=https://api.openai.com/v1
 LLM_BINDING_API_KEY=your_api_key
-### 发送给 LLM 进行实体关系摘要的最大 token 数（小于模型上下文大小）
-MAX_TOKENS=32000
 
 EMBEDDING_BINDING=ollama
 EMBEDDING_BINDING_HOST=http://localhost:11434
@@ -71,8 +69,6 @@ LLM_BINDING=ollama
 LLM_MODEL=mistral-nemo:latest
 LLM_BINDING_HOST=http://localhost:11434
 # LLM_BINDING_API_KEY=your_api_key
-### 发送给 LLM 进行实体关系摘要的最大 token 数（小于模型上下文大小）
-MAX_TOKENS=7500
 ###  Ollama 服务器上下文 token 数（基于您的 Ollama 服务器容量）
 OLLAMA_NUM_CTX=8192
 
@@ -419,6 +415,8 @@ PGDocStatusStorage          Postgres
 MongoDocStatusStorage       MongoDB
 ```
 
+每一种存储类型的链接配置范例可以在 `env.example` 文件中找到。链接字符串中的数据库实例是需要你预先在数据库服务器上创建好的，LightRAG 仅负责在数据库实例中创建数据表，不负责创建数据库实例。如果使用 Redis 作为存储，记得给 Redis 配置自动持久化数据规则，否则 Redis 服务重启后数据会丢失。
+
 ### 如何选择存储实现
 
 您可以通过环境变量选择存储实现。在首次启动 API 服务器之前，您可以将以下环境变量设置为特定的存储实现名称：
@@ -472,7 +470,6 @@ MAX_PARALLEL_INSERT=2
 TIMEOUT=200
 TEMPERATURE=0.0
 MAX_ASYNC=4
-MAX_TOKENS=32768
 
 LLM_BINDING=openai
 LLM_MODEL=gpt-4o-mini
@@ -568,12 +565,12 @@ pip install lightrag-hku
 
 LightRAG 中的文档处理流程有些复杂，分为两个主要阶段：提取阶段（实体和关系提取）和合并阶段（实体和关系合并）。有两个关键参数控制流程并发性：并行处理的最大文件数（`MAX_PARALLEL_INSERT`）和最大并发 LLM 请求数（`MAX_ASYNC`）。工作流程描述如下：
 
-1. `MAX_PARALLEL_INSERT` 控制提取阶段并行处理的文件数量。
-2. `MAX_ASYNC` 限制系统中并发 LLM 请求的总数，包括查询、提取和合并的请求。LLM 请求具有不同的优先级：查询操作优先级最高，其次是合并，然后是提取。
+1. `MAX_ASYNC` 限制系统中并发 LLM 请求的总数，包括查询、提取和合并的请求。LLM 请求具有不同的优先级：查询操作优先级最高，其次是合并，然后是提取。
+2. `MAX_PARALLEL_INSERT` 控制提取阶段并行处理的文件数量。`MAX_PARALLEL_INSERT`建议设置为2～10之间，通常设置为 `MAX_ASYNC/3`，设置太大会导致合并阶段不同文档之间实体和关系重名的机会增大，降低合并阶段的效率。
 3. 在单个文件中，来自不同文本块的实体和关系提取是并发处理的，并发度由 `MAX_ASYNC` 设置。只有在处理完 `MAX_ASYNC` 个文本块后，系统才会继续处理同一文件中的下一批文本块。
-4. 合并阶段仅在文件中所有文本块完成实体和关系提取后开始。当一个文件进入合并阶段时，流程允许下一个文件开始提取。
-5. 由于提取阶段通常比合并阶段快，因此实际并发处理的文件数可能会超过 `MAX_PARALLEL_INSERT`，因为此参数仅控制提取阶段的并行度。
-6. 为防止竞争条件，合并阶段不支持多个文件的并发处理；一次只能合并一个文件，其他文件必须在队列中等待。
+4. 当一个文件完成实体和关系提后，将进入实体和关系合并阶段。这一阶段也会并发处理多个实体和关系，其并发度同样是由 `MAX_ASYNC` 控制。
+5. 合并阶段的 LLM 请求的优先级别高于提取阶段，目的是让进入合并阶段的文件尽快完成处理，并让处理结果尽快更新到向量数据库中。
+6. 为防止竞争条件，合并阶段会避免并发处理同一个实体或关系，当多个文件中都涉及同一个实体或关系需要合并的时候他们会串行执行。
 7. 每个文件在流程中被视为一个原子处理单元。只有当其所有文本块都完成提取和合并后，文件才会被标记为成功处理。如果在处理过程中发生任何错误，整个文件将被标记为失败，并且必须重新处理。
 8. 当由于错误而重新处理文件时，由于 LLM 缓存，先前处理的文本块可以快速跳过。尽管 LLM 缓存在合并阶段也会被利用，但合并顺序的不一致可能会限制其在此阶段的有效性。
 9. 如果在提取过程中发生错误，系统不会保留任何中间结果。如果在合并过程中发生错误，已合并的实体和关系可能会被保留；当重新处理同一文件时，重新提取的实体和关系将与现有实体和关系合并，而不会影响查询结果。

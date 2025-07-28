@@ -218,12 +218,12 @@ async def main():
     try:
         # Initialize RAG instance
         rag = await initialize_rag()
-        rag.insert("Your text")
+        await rag.ainsert("Your text")
 
         # Perform hybrid search
         mode = "hybrid"
         print(
-          await rag.query(
+          await rag.aquery(
               "What are the top themes in this story?",
               param=QueryParam(mode=mode)
           )
@@ -272,7 +272,7 @@ A full list of LightRAG init parameters:
 | **embedding_func_max_async** | `int` | Maximum number of concurrent asynchronous embedding processes | `16` |
 | **llm_model_func** | `callable` | Function for LLM generation | `gpt_4o_mini_complete` |
 | **llm_model_name** | `str` | LLM model name for generation | `meta-llama/Llama-3.2-1B-Instruct` |
-| **llm_model_max_token_size** | `int` | Maximum tokens send to LLM to generate entity relation summaries | `32000`（default value changed by env var MAX_TOKENS) |
+| **summary_max_tokens** | `int` | Maximum tokens send to LLM to generate entity relation summaries | `32000`（default value changed by env var MAX_TOKENS) |
 | **llm_model_max_async** | `int` | Maximum number of concurrent asynchronous LLM processes | `4`（default value changed by env var MAX_ASYNC) |
 | **llm_model_kwargs** | `dict` | Additional parameters for LLM generation | |
 | **vector_db_storage_cls_kwargs** | `dict` | Additional parameters for vector database, like setting the threshold for nodes and relations retrieval | cosine_better_than_threshold: 0.2（default value changed by env var COSINE_THRESHOLD) |
