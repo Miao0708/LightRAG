@@ -1699,4 +1699,137 @@ def create_document_routes(
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail=error_msg)
 
+    # 简单的流水线控制端点
+    @router.post("/pipeline/pause", dependencies=[Depends(combined_auth)])
+    async def pause_pipeline():
+        """暂停流水线"""
+        from lightrag.kg.shared_storage import get_namespace_data, get_pipeline_status_lock
+        
+        pipeline_status = await get_namespace_data("pipeline_status")
+        pipeline_status_lock = get_pipeline_status_lock()
+        
+        async with pipeline_status_lock:
+            pipeline_status["paused"] = True
+            pipeline_status["latest_message"] = "流水线已暂停"
+            pipeline_status["history_messages"].append(
+                f"流水线暂停 - {datetime.now().isoformat()}"
+            )
+        
+        return {"status": "success", "message": "流水线已暂停"}
+
+    @router.post("/pipeline/resume", dependencies=[Depends(combined_auth)])
+    async def resume_pipeline():
+        """恢复流水线"""
+        from lightrag.kg.shared_storage import get_namespace_data, get_pipeline_status_lock
+        
+        pipeline_status = await get_namespace_data("pipeline_status")
+        pipeline_status_lock = get_pipeline_status_lock()
+        
+        async with pipeline_status_lock:
+            pipeline_status["paused"] = False
+            pipeline_status["request_pending"] = True
+            pipeline_status["latest_message"] = "流水线已恢复"
+            pipeline_status["history_messages"].append(
+                f"流水线恢复 - {datetime.now().isoformat()}"
+            )
+        
+        return {"status": "success", "message": "流水线已恢复"}
+
+    @router.post("/pipeline/force_stop", dependencies=[Depends(combined_auth)])
+    async def force_stop_pipeline():
+        """强制停止流水线"""
+        from lightrag.kg.shared_storage import get_namespace_data, get_pipeline_status_lock
+        
+        pipeline_status = await get_namespace_data("pipeline_status")
+        pipeline_status_lock = get_pipeline_status_lock()
+        
+        async with pipeline_status_lock:
+            pipeline_status["busy"] = False
+            pipeline_status["paused"] = False
+            pipeline_status["force_stopped"] = True
+            pipeline_status["latest_message"] = "流水线已强制停止"
+            pipeline_status["history_messages"].append(
+                f"流水线强制停止 - {datetime.now().isoformat()}"
+            )
+        
+        return {"status": "success", "message": "流水线已强制停止"}
+
+    @router.post("/reset/all_databases", dependencies=[Depends(combined_auth)])
+    async def reset_all_databases():
+        """重置所有数据库"""
+        from lightrag.kg.shared_storage import get_namespace_data, get_pipeline_status_lock
+        
+        pipeline_status = await get_namespace_data("pipeline_status")
+        pipeline_status_lock = get_pipeline_status_lock()
+        
+        # 检查是否忙碌
+        async with pipeline_status_lock:
+            if pipeline_status.get("busy", False):
+                raise HTTPException(status_code=400, detail="流水线正在运行，请先停止")
+            
+            pipeline_status["busy"] = True
+            pipeline_status["job_name"] = "重置数据库"
+            pipeline_status["latest_message"] = "开始重置所有数据库..."
+        
+        try:
+            reset_results = {}
+            
+            # 重置向量数据库
+            vector_storages = ["entities_vdb", "relationships_vdb", "chunks_vdb"]
+            for storage_name in vector_storages:
+                storage = getattr(rag, storage_name, None)
+                if storage:
+                    try:
+                        await storage.drop()
+                        reset_results[storage_name] = "成功"
+                    except Exception as e:
+                        reset_results[storage_name] = f"失败: {str(e)}"
+            
+            # 重置图数据库
+            if rag.chunk_entity_relation_graph:
+                try:
+                    await rag.chunk_entity_relation_graph.drop()
+                    reset_results["graph"] = "成功"
+                except Exception as e:
+                    reset_results["graph"] = f"失败: {str(e)}"
+            
+            # 重置文本存储
+            text_storages = ["text_chunks", "full_docs"]
+            for storage_name in text_storages:
+                storage = getattr(rag, storage_name, None)
+                if storage:
+                    try:
+                        await storage.drop()
+                        reset_results[storage_name] = "成功"
+                    except Exception as e:
+                        reset_results[storage_name] = f"失败: {str(e)}"
+            
+            # 重置文档状态
+            if rag.doc_status:
+                try:
+                    await rag.doc_status.drop()
+                    reset_results["doc_status"] = "成功"
+                except Exception as e:
+                    reset_results["doc_status"] = f"失败: {str(e)}"
+            
+            # 重置缓存
+            if rag.llm_response_cache:
+                try:
+                    await rag.llm_response_cache.drop()
+                    reset_results["cache"] = "成功"
+                except Exception as e:
+                    reset_results["cache"] = f"失败: {str(e)}"
+            
+            return {"status": "success", "message": "数据库重置完成", "details": reset_results}
+            
+        except Exception as e:
+            logger.error(f"数据库重置失败: {e}")
+            raise HTTPException(status_code=500, detail=f"重置失败: {str(e)}")
+        
+        finally:
+            async with pipeline_status_lock:
+                pipeline_status["busy"] = False
+                pipeline_status["job_name"] = "-"
+                pipeline_status["latest_message"] = "数据库重置操作完成"
+
     return router

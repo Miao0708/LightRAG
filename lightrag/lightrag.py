@@ -954,6 +954,17 @@ class LightRAG:
 
         # Check if another process is already processing the queue
         async with pipeline_status_lock:
+            # Check if paused
+            if pipeline_status.get("paused", False):
+                logger.info("Pipeline is paused, skipping processing")
+                return
+            
+            # Check if force stopped
+            if pipeline_status.get("force_stopped", False):
+                logger.info("Pipeline was force stopped, clearing flag and skipping")
+                pipeline_status["force_stopped"] = False
+                return
+            
             # Ensure only one worker is processing documents
             if not pipeline_status.get("busy", False):
                 processing_docs, failed_docs, pending_docs = await asyncio.gather(
@@ -996,6 +1007,16 @@ class LightRAG:
         try:
             # Process documents until no more documents or requests
             while True:
+                # Check for pause or force stop at the beginning of each loop
+                async with pipeline_status_lock:
+                    if pipeline_status.get("paused", False):
+                        logger.info("Pipeline paused during processing, stopping loop")
+                        break
+                    if pipeline_status.get("force_stopped", False):
+                        logger.info("Pipeline force stopped during processing, stopping loop")
+                        pipeline_status["force_stopped"] = False
+                        break
+                
                 if not to_process_docs:
                     log_message = "All documents have been processed or are duplicates"
                     logger.info(log_message)
