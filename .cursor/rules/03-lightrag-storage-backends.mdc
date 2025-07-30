@@ -1,0 +1,1022 @@
+# LightRAG 存储后端开发规则 (2025版)
+
+## 🗄️ 存储架构概览
+
+LightRAG采用分层存储架构，支持多种存储后端的无缝切换。根据用户配置，当前使用：
+- **KV存储**: RedisKVStorage (键值对存储)
+- **文档状态**: PGDocStatusStorage (PostgreSQL)
+- **图存储**: Neo4JStorage (Neo4j图数据库) 
+- **向量存储**: PGVectorStorage (PostgreSQL + pgvector)
+
+支持从本地开发到生产环境的平滑迁移。
+
+## 📂 存储模块结构
+
+```
+lightrag/kg/
+├── shared_storage.py           # 存储接口定义和管理器
+├── json_kv_impl.py            # JSON本地存储 (开发)
+├── json_doc_status_impl.py    # JSON文档状态存储
+├── redis_impl.py              # Redis实现 (生产推荐)
+├── postgres_impl.py           # PostgreSQL实现 (向量+文档)
+├── neo4j_impl.py              # Neo4j实现 (图存储)
+├── mongo_impl.py              # MongoDB实现
+├── milvus_impl.py             # Milvus向量数据库
+├── qdrant_impl.py             # Qdrant向量数据库
+├── faiss_impl.py              # Faiss向量索引 (本地)
+├── memgraph_impl.py           # Memgraph图数据库
+└── nano_vector_db_impl.py     # 轻量级向量数据库
+```
+
+## 🔧 2025年存储接口规范
+
+### 异步存储基类设计
+```python
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Union, AsyncGenerator
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
+
+class BaseStorageManager(ABC):
+    """2025年异步存储管理器基类"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.is_initialized = False
+        self.connection_pool: Optional[Any] = None
+        
+    async def __aenter__(self):
+        await self.initialize()
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+    
+    @abstractmethod
+    async def initialize(self) -> None:
+        """初始化存储连接"""
+        pass
+    
+    @abstractmethod
+    async def close(self) -> None:
+        """关闭存储连接"""
+        pass
+    
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """健康检查"""
+        pass
+    
+    # 异步批量操作接口
+    @abstractmethod
+    async def batch_get(self, keys: List[str]) -> Dict[str, Any]:
+        """批量获取数据"""
+        pass
+    
+    @abstractmethod
+    async def batch_set(self, data: Dict[str, Any]) -> bool:
+        """批量设置数据"""
+        pass
+    
+    @abstractmethod
+    async def batch_delete(self, keys: List[str]) -> bool:
+        """批量删除数据"""
+        pass
+    
+    # 流式操作接口 (2025新增)
+    @abstractmethod
+    async def stream_keys(self, pattern: str = "*") -> AsyncGenerator[str, None]:
+        """流式获取键名"""
+        pass
+    
+    @abstractmethod
+    async def stream_values(self, keys: List[str]) -> AsyncGenerator[Any, None]:
+        """流式获取值"""
+        pass
+```
+
+## 🔴 Redis异步实现 (2025优化版)
+
+### Redis连接池管理
+```python
+import redis.asyncio as redis
+import json
+import asyncio
+from typing import Optional, Dict, Any, List
+import time
+
+class RedisKVStorage(BaseStorageManager):
+    """2025年Redis异步存储实现"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.pool: Optional[redis.ConnectionPool] = None
+        self.client: Optional[redis.Redis] = None
+        self.cluster_mode = config.get("cluster_mode", False)
+        
+        # 性能统计
+        self.stats = {
+            "operations": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": 0,
+            "avg_response_time": 0.0
+        }
+    
+    async def initialize(self) -> None:
+        """初始化Redis连接池 - 2025最佳配置"""
+        try:
+            if self.cluster_mode:
+                # Redis Cluster模式
+                from redis.asyncio.cluster import RedisCluster
+                self.client = RedisCluster(
+                    startup_nodes=[
+                        {"host": node["host"], "port": node["port"]}
+                        for node in self.config.get("cluster_nodes", [])
+                    ],
+                    decode_responses=True,
+                    skip_full_coverage_check=True,
+                    max_connections_per_node=20,
+                    retry_on_timeout=True,
+                    health_check_interval=30
+                )
+            else:
+                # 单机模式连接池
+                self.pool = redis.ConnectionPool.from_url(
+                    self.config.get("url", "redis://localhost:6379/0"),
+                    max_connections=50,           # 连接池大小
+                    socket_connect_timeout=5,     # 连接超时
+                    socket_timeout=30,            # 操作超时
+                    retry_on_timeout=True,        # 超时重试
+                    health_check_interval=30,     # 健康检查间隔
+                    encoding='utf-8',
+                    decode_responses=True
+                )
+                self.client = redis.Redis.from_pool(self.pool)
+            
+            # 测试连接
+            await self.client.ping()
+            self.is_initialized = True
+            logger.info("Redis连接初始化成功")
+            
+        except Exception as e:
+            logger.error(f"Redis连接初始化失败: {e}")
+            raise
+    
+    async def close(self) -> None:
+        """正确关闭Redis连接"""
+        if self.client:
+            await self.client.aclose()
+        if self.pool:
+            await self.pool.aclose()
+        self.is_initialized = False
+        logger.info("Redis连接已关闭")
+    
+    async def health_check(self) -> bool:
+        """Redis健康检查"""
+        try:
+            start_time = time.time()
+            result = await asyncio.wait_for(self.client.ping(), timeout=5.0)
+            response_time = time.time() - start_time
+            
+            # 更新性能统计
+            self.stats["avg_response_time"] = (
+                self.stats["avg_response_time"] * 0.9 + response_time * 0.1
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Redis健康检查失败: {e}")
+            self.stats["errors"] += 1
+            return False
+    
+    # 高性能异步操作实现
+    async def get(self, key: str) -> Optional[Any]:
+        """异步获取单个键值"""
+        start_time = time.time()
+        try:
+            self.stats["operations"] += 1
+            value = await self.client.get(key)
+            
+            if value is not None:
+                self.stats["cache_hits"] += 1
+                # 尝试解析JSON，如果失败则返回原始字符串
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    return value
+            else:
+                self.stats["cache_misses"] += 1
+                return None
+                
+        except Exception as e:
+            self.stats["errors"] += 1
+            logger.error(f"Redis GET错误 {key}: {e}")
+            return None
+        finally:
+            # 更新响应时间统计
+            response_time = time.time() - start_time
+            self.stats["avg_response_time"] = (
+                self.stats["avg_response_time"] * 0.9 + response_time * 0.1
+            )
+    
+    async def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        """异步设置键值对"""
+        try:
+            self.stats["operations"] += 1
+            
+            # 序列化值
+            if isinstance(value, (dict, list)):
+                serialized_value = json.dumps(value, ensure_ascii=False)
+            else:
+                serialized_value = str(value)
+            
+            # 设置过期时间
+            if ex is not None:
+                result = await self.client.set(key, serialized_value, ex=ex)
+            else:
+                result = await self.client.set(key, serialized_value)
+            
+            return bool(result)
+            
+        except Exception as e:
+            self.stats["errors"] += 1
+            logger.error(f"Redis SET错误 {key}: {e}")
+            return False
+    
+    async def batch_get(self, keys: List[str]) -> Dict[str, Any]:
+        """批量获取 - 2025优化版"""
+        if not keys:
+            return {}
+        
+        try:
+            self.stats["operations"] += len(keys)
+            
+            # 使用mget批量获取
+            values = await self.client.mget(keys)
+            
+            result = {}
+            for key, value in zip(keys, values):
+                if value is not None:
+                    self.stats["cache_hits"] += 1
+                    try:
+                        result[key] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        result[key] = value
+                else:
+                    self.stats["cache_misses"] += 1
+            
+            return result
+            
+        except Exception as e:
+            self.stats["errors"] += len(keys)
+            logger.error(f"Redis批量GET错误: {e}")
+            return {}
+    
+    async def batch_set(self, data: Dict[str, Any], ex: Optional[int] = None) -> bool:
+        """批量设置 - 使用pipeline优化"""
+        if not data:
+            return True
+        
+        try:
+            self.stats["operations"] += len(data)
+            
+            # 使用pipeline批量设置
+            async with self.client.pipeline(transaction=True) as pipe:
+                for key, value in data.items():
+                    # 序列化值
+                    if isinstance(value, (dict, list)):
+                        serialized_value = json.dumps(value, ensure_ascii=False)
+                    else:
+                        serialized_value = str(value)
+                    
+                    if ex is not None:
+                        pipe.set(key, serialized_value, ex=ex)
+                    else:
+                        pipe.set(key, serialized_value)
+                
+                results = await pipe.execute()
+                return all(results)
+                
+        except Exception as e:
+            self.stats["errors"] += len(data)
+            logger.error(f"Redis批量SET错误: {e}")
+            return False
+    
+    async def batch_delete(self, keys: List[str]) -> bool:
+        """批量删除"""
+        if not keys:
+            return True
+        
+        try:
+            self.stats["operations"] += len(keys)
+            deleted_count = await self.client.delete(*keys)
+            return deleted_count > 0
+            
+        except Exception as e:
+            self.stats["errors"] += len(keys)
+            logger.error(f"Redis批量DELETE错误: {e}")
+            return False
+    
+    async def stream_keys(self, pattern: str = "*") -> AsyncGenerator[str, None]:
+        """流式获取键名 - 使用SCAN避免阻塞"""
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await self.client.scan(
+                    cursor=cursor, 
+                    match=pattern, 
+                    count=100  # 每次扫描100个键
+                )
+                
+                for key in keys:
+                    yield key
+                
+                if cursor == 0:  # 扫描完毕
+                    break
+                    
+                # 避免过快迭代，给其他操作让出时间
+                await asyncio.sleep(0.001)
+                
+        except Exception as e:
+            logger.error(f"Redis SCAN错误: {e}")
+    
+    async def stream_values(self, keys: List[str]) -> AsyncGenerator[Any, None]:
+        """流式获取值 - 分批处理大量键"""
+        batch_size = 100
+        
+        for i in range(0, len(keys), batch_size):
+            batch_keys = keys[i:i + batch_size]
+            batch_values = await self.batch_get(batch_keys)
+            
+            for key in batch_keys:
+                yield batch_values.get(key)
+            
+            # 避免阻塞事件循环
+            await asyncio.sleep(0.001)
+    
+    # 2025新增：性能监控方法
+    async def get_stats(self) -> Dict[str, Any]:
+        """获取性能统计信息"""
+        total_ops = self.stats["operations"]
+        hit_rate = (
+            self.stats["cache_hits"] / total_ops * 100 
+            if total_ops > 0 else 0
+        )
+        
+        return {
+            **self.stats,
+            "cache_hit_rate": f"{hit_rate:.2f}%",
+            "error_rate": f"{self.stats['errors'] / total_ops * 100:.2f}%" if total_ops > 0 else "0%",
+            "avg_response_time_ms": f"{self.stats['avg_response_time'] * 1000:.2f}ms"
+        }
+    
+    async def reset_stats(self):
+        """重置性能统计"""
+        self.stats = {
+            "operations": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": 0,
+            "avg_response_time": 0.0
+        }
+```
+
+## 🐘 PostgreSQL异步实现 (2025优化版)
+
+### PostgreSQL + pgvector最佳实践
+```python
+import asyncpg
+import numpy as np
+import json
+from typing import List, Dict, Any, Optional, Tuple
+import time
+
+class PGVectorStorage(BaseStorageManager):
+    """2025年PostgreSQL + pgvector异步实现"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.pool: Optional[asyncpg.Pool] = None
+        self.vector_dim = config.get("vector_dim", 1024)
+        
+    async def initialize(self) -> None:
+        """初始化PostgreSQL连接池"""
+        try:
+            # 2025年优化的连接池配置
+            self.pool = await asyncpg.create_pool(
+                host=self.config.get("host", "localhost"),
+                port=self.config.get("port", 5432),
+                user=self.config.get("user", "postgres"),
+                password=self.config.get("password"),
+                database=self.config.get("database", "lightrag_db"),
+                min_size=5,                    # 最小连接数
+                max_size=50,                   # 最大连接数
+                command_timeout=60,            # 命令超时
+                server_settings={
+                    'jit': 'off',              # 禁用JIT提升小查询性能
+                    'shared_preload_libraries': 'vector,pg_stat_statements',
+                    'max_connections': '200',
+                    'work_mem': '256MB',       # 提升排序性能
+                    'maintenance_work_mem': '1GB',  # 提升索引构建性能
+                    'effective_cache_size': '4GB',  # 缓存大小
+                    'random_page_cost': '1.1',     # SSD优化
+                    'effective_io_concurrency': '200'  # 并发I/O
+                }
+            )
+            
+            await self._create_extensions_and_tables()
+            self.is_initialized = True
+            logger.info("PostgreSQL + pgvector连接初始化成功")
+            
+        except Exception as e:
+            logger.error(f"PostgreSQL连接初始化失败: {e}")
+            raise
+    
+    async def _create_extensions_and_tables(self):
+        """创建扩展和表结构"""
+        async with self.pool.acquire() as conn:
+            # 创建扩展
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;")
+            
+            # 创建向量表
+            await conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id SERIAL PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    embedding vector({self.vector_dim}),
+                    metadata JSONB DEFAULT '{{}}',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
+            
+            # 创建索引 - 2025年优化配置
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS embeddings_vector_cosine_idx 
+                ON embeddings USING ivfflat (embedding vector_cosine_ops) 
+                WITH (lists = 1000);
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS embeddings_metadata_idx 
+                ON embeddings USING GIN (metadata);
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS embeddings_created_at_idx 
+                ON embeddings (created_at DESC);
+            """)
+            
+            # 创建更新时间触发器
+            await conn.execute("""
+                CREATE OR REPLACE FUNCTION update_updated_at_column()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.updated_at = NOW();
+                    RETURN NEW;
+                END;
+                $$ language 'plpgsql';
+            """)
+            
+            await conn.execute("""
+                DROP TRIGGER IF EXISTS update_embeddings_updated_at ON embeddings;
+                CREATE TRIGGER update_embeddings_updated_at 
+                BEFORE UPDATE ON embeddings 
+                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+            """)
+    
+    async def close(self) -> None:
+        """关闭连接池"""
+        if self.pool:
+            await self.pool.close()
+        self.is_initialized = False
+        logger.info("PostgreSQL连接已关闭")
+    
+    async def health_check(self) -> bool:
+        """健康检查"""
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.fetchval("SELECT 1")
+                return result == 1
+        except Exception as e:
+            logger.error(f"PostgreSQL健康检查失败: {e}")
+            return False
+    
+    async def upsert_embeddings(
+        self, 
+        data: List[Tuple[str, np.ndarray, Dict[str, Any]]]
+    ) -> bool:
+        """批量插入/更新向量数据 - 2025优化版"""
+        if not data:
+            return True
+        
+        try:
+            async with self.pool.acquire() as conn:
+                # 使用COPY进行高性能批量插入
+                records = []
+                for content, embedding, metadata in data:
+                    records.append((
+                        content,
+                        embedding.tolist(),  # 转换为列表
+                        json.dumps(metadata)
+                    ))
+                
+                # 使用ON CONFLICT进行upsert
+                await conn.executemany("""
+                    INSERT INTO embeddings (content, embedding, metadata)
+                    VALUES ($1, $2::vector, $3::jsonb)
+                    ON CONFLICT (content) DO UPDATE SET
+                        embedding = EXCLUDED.embedding,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = NOW()
+                """, records)
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"PostgreSQL批量upsert错误: {e}")
+            return False
+    
+    async def similarity_search(
+        self, 
+        query_vector: np.ndarray, 
+        top_k: int = 10,
+        threshold: float = 0.7,
+        metadata_filter: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """向量相似度搜索 - 2025优化版"""
+        try:
+            async with self.pool.acquire() as conn:
+                # 构建查询条件
+                where_clause = ""
+                params = [query_vector.tolist(), threshold, top_k]
+                
+                if metadata_filter:
+                    conditions = []
+                    for key, value in metadata_filter.items():
+                        conditions.append(f"metadata ->> '{key}' = ${len(params) + 1}")
+                        params.append(str(value))
+                    
+                    if conditions:
+                        where_clause = f"AND {' AND '.join(conditions)}"
+                
+                # 执行向量相似度搜索
+                query = f"""
+                    SELECT 
+                        id, 
+                        content, 
+                        metadata, 
+                        1 - (embedding <=> $1::vector) as similarity,
+                        created_at
+                    FROM embeddings
+                    WHERE 1 - (embedding <=> $1::vector) > $2
+                    {where_clause}
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $3
+                """
+                
+                rows = await conn.fetch(query, *params)
+                
+                return [
+                    {
+                        "id": row["id"],
+                        "content": row["content"],
+                        "metadata": row["metadata"],
+                        "similarity": float(row["similarity"]),
+                        "created_at": row["created_at"].isoformat()
+                    }
+                    for row in rows
+                ]
+                
+        except Exception as e:
+            logger.error(f"PostgreSQL向量搜索错误: {e}")
+            return []
+    
+    async def get_collection_stats(self) -> Dict[str, Any]:
+        """获取集合统计信息"""
+        try:
+            async with self.pool.acquire() as conn:
+                stats = await conn.fetchrow("""
+                    SELECT 
+                        COUNT(*) as total_vectors,
+                        AVG(ARRAY_LENGTH(embedding::float[], 1)) as avg_dimension,
+                        MIN(created_at) as oldest_record,
+                        MAX(created_at) as newest_record,
+                        pg_size_pretty(pg_total_relation_size('embeddings')) as table_size
+                    FROM embeddings
+                """)
+                
+                return dict(stats) if stats else {}
+                
+        except Exception as e:
+            logger.error(f"获取统计信息错误: {e}")
+            return {}
+    
+    # 实现基类方法
+    async def batch_get(self, keys: List[str]) -> Dict[str, Any]:
+        """批量获取文档"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT content, metadata, embedding 
+                    FROM embeddings 
+                    WHERE content = ANY($1::text[])
+                """, keys)
+                
+                return {
+                    row["content"]: {
+                        "metadata": row["metadata"],
+                        "embedding": row["embedding"]
+                    }
+                    for row in rows
+                }
+                
+        except Exception as e:
+            logger.error(f"PostgreSQL批量获取错误: {e}")
+            return {}
+    
+    async def batch_set(self, data: Dict[str, Any]) -> bool:
+        """批量设置文档"""
+        embeddings_data = [
+            (key, np.array(value["embedding"]), value.get("metadata", {}))
+            for key, value in data.items()
+            if "embedding" in value
+        ]
+        return await self.upsert_embeddings(embeddings_data)
+    
+    async def batch_delete(self, keys: List[str]) -> bool:
+        """批量删除文档"""
+        try:
+            async with self.pool.acquire() as conn:
+                deleted_count = await conn.execute("""
+                    DELETE FROM embeddings 
+                    WHERE content = ANY($1::text[])
+                """, keys)
+                return int(deleted_count.split()[-1]) > 0
+                
+        except Exception as e:
+            logger.error(f"PostgreSQL批量删除错误: {e}")
+            return False
+    
+    async def stream_keys(self, pattern: str = "*") -> AsyncGenerator[str, None]:
+        """流式获取内容键"""
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # 使用服务器端游标避免内存问题
+                    await conn.execute("""
+                        DECLARE content_cursor CURSOR FOR 
+                        SELECT content FROM embeddings ORDER BY id
+                    """)
+                    
+                    while True:
+                        rows = await conn.fetch("FETCH 100 FROM content_cursor")
+                        if not rows:
+                            break
+                        
+                        for row in rows:
+                            yield row["content"]
+                        
+                        await asyncio.sleep(0.001)
+                        
+        except Exception as e:
+            logger.error(f"PostgreSQL流式键获取错误: {e}")
+    
+    async def stream_values(self, keys: List[str]) -> AsyncGenerator[Any, None]:
+        """流式获取值"""
+        batch_size = 50
+        for i in range(0, len(keys), batch_size):
+            batch_keys = keys[i:i + batch_size]
+            batch_data = await self.batch_get(batch_keys)
+            
+            for key in batch_keys:
+                yield batch_data.get(key)
+            
+            await asyncio.sleep(0.001)
+```
+
+## 🔗 Neo4j图数据库实现 (2025版)
+
+### 异步Neo4j操作
+```python
+from neo4j import AsyncGraphDatabase
+from typing import List, Dict, Any, Optional
+import asyncio
+
+class Neo4JStorage(BaseStorageManager):
+    """2025年Neo4j异步图存储实现"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.driver = None
+        self.max_connection_lifetime = config.get("max_connection_lifetime", 3600)
+        
+    async def initialize(self) -> None:
+        """初始化Neo4j连接"""
+        try:
+            self.driver = AsyncGraphDatabase.driver(
+                self.config.get("uri", "bolt://localhost:7687"),
+                auth=(
+                    self.config.get("user", "neo4j"),
+                    self.config.get("password", "password")
+                ),
+                max_connection_lifetime=self.max_connection_lifetime,
+                max_connection_pool_size=50,
+                connection_acquisition_timeout=60,
+                encrypted=self.config.get("encrypted", False)
+            )
+            
+            # 测试连接
+            await self.driver.verify_connectivity()
+            
+            # 创建索引
+            await self._create_indexes()
+            
+            self.is_initialized = True
+            logger.info("Neo4j连接初始化成功")
+            
+        except Exception as e:
+            logger.error(f"Neo4j连接初始化失败: {e}")
+            raise
+    
+    async def _create_indexes(self):
+        """创建图数据库索引"""
+        async with self.driver.session() as session:
+            # 实体索引
+            await session.run("""
+                CREATE INDEX entity_name_idx IF NOT EXISTS 
+                FOR (e:Entity) ON (e.name)
+            """)
+            
+            # 关系索引
+            await session.run("""
+                CREATE INDEX relation_type_idx IF NOT EXISTS 
+                FOR ()-[r:RELATION]-() ON (r.type)
+            """)
+    
+    async def close(self) -> None:
+        """关闭Neo4j连接"""
+        if self.driver:
+            await self.driver.close()
+        self.is_initialized = False
+        logger.info("Neo4j连接已关闭")
+    
+    async def health_check(self) -> bool:
+        """Neo4j健康检查"""
+        try:
+            await self.driver.verify_connectivity()
+            return True
+        except Exception as e:
+            logger.error(f"Neo4j健康检查失败: {e}")
+            return False
+    
+    async def upsert_entities(self, entities: List[Dict[str, Any]]) -> bool:
+        """批量插入/更新实体"""
+        try:
+            async with self.driver.session() as session:
+                await session.execute_write(self._upsert_entities_tx, entities)
+                return True
+        except Exception as e:
+            logger.error(f"Neo4j实体upsert错误: {e}")
+            return False
+    
+    @staticmethod
+    async def _upsert_entities_tx(tx, entities):
+        """实体upsert事务"""
+        for entity in entities:
+            await tx.run("""
+                MERGE (e:Entity {name: $name})
+                SET e.description = $description,
+                    e.type = $type,
+                    e.properties = $properties,
+                    e.updated_at = datetime()
+            """, 
+            name=entity["name"],
+            description=entity.get("description", ""),
+            type=entity.get("type", ""),
+            properties=entity.get("properties", {})
+            )
+    
+    async def upsert_relationships(self, relationships: List[Dict[str, Any]]) -> bool:
+        """批量插入/更新关系"""
+        try:
+            async with self.driver.session() as session:
+                await session.execute_write(self._upsert_relationships_tx, relationships)
+                return True
+        except Exception as e:
+            logger.error(f"Neo4j关系upsert错误: {e}")
+            return False
+    
+    @staticmethod
+    async def _upsert_relationships_tx(tx, relationships):
+        """关系upsert事务"""
+        for rel in relationships:
+            await tx.run("""
+                MATCH (src:Entity {name: $src_name})
+                MATCH (tgt:Entity {name: $tgt_name})
+                MERGE (src)-[r:RELATION {type: $rel_type}]->(tgt)
+                SET r.description = $description,
+                    r.properties = $properties,
+                    r.updated_at = datetime()
+            """,
+            src_name=rel["source"],
+            tgt_name=rel["target"],
+            rel_type=rel["type"],
+            description=rel.get("description", ""),
+            properties=rel.get("properties", {})
+            )
+    
+    async def get_subgraph(
+        self, 
+        entity_names: List[str], 
+        max_depth: int = 2
+    ) -> Dict[str, Any]:
+        """获取子图"""
+        try:
+            async with self.driver.session() as session:
+                result = await session.execute_read(
+                    self._get_subgraph_tx, 
+                    entity_names, 
+                    max_depth
+                )
+                return result
+        except Exception as e:
+            logger.error(f"Neo4j子图查询错误: {e}")
+            return {"nodes": [], "edges": []}
+    
+    @staticmethod
+    async def _get_subgraph_tx(tx, entity_names, max_depth):
+        """子图查询事务"""
+        # 查询节点和关系
+        result = await tx.run(f"""
+            MATCH path = (start:Entity)-[*1..{max_depth}]-(end:Entity)
+            WHERE start.name IN $entity_names
+            RETURN nodes(path) as nodes, relationships(path) as rels
+        """, entity_names=entity_names)
+        
+        nodes = []
+        edges = []
+        node_ids = set()
+        edge_ids = set()
+        
+        async for record in result:
+            # 处理节点
+            for node in record["nodes"]:
+                if node.id not in node_ids:
+                    nodes.append({
+                        "id": str(node.id),
+                        "name": node["name"],
+                        "type": node.get("type", ""),
+                        "description": node.get("description", ""),
+                        "properties": dict(node.get("properties", {}))
+                    })
+                    node_ids.add(node.id)
+            
+            # 处理关系
+            for rel in record["rels"]:
+                if rel.id not in edge_ids:
+                    edges.append({
+                        "id": str(rel.id),
+                        "source": str(rel.start_node.id),
+                        "target": str(rel.end_node.id),
+                        "type": rel["type"],
+                        "description": rel.get("description", ""),
+                        "properties": dict(rel.get("properties", {}))
+                    })
+                    edge_ids.add(rel.id)
+        
+        return {"nodes": nodes, "edges": edges}
+    
+    # 实现基类方法
+    async def batch_get(self, keys: List[str]) -> Dict[str, Any]:
+        """批量获取实体"""
+        try:
+            async with self.driver.session() as session:
+                result = await session.execute_read(self._batch_get_entities_tx, keys)
+                return result
+        except Exception as e:
+            logger.error(f"Neo4j批量获取错误: {e}")
+            return {}
+    
+    @staticmethod
+    async def _batch_get_entities_tx(tx, entity_names):
+        """批量获取实体事务"""
+        result = await tx.run("""
+            MATCH (e:Entity)
+            WHERE e.name IN $names
+            RETURN e.name as name, e
+        """, names=entity_names)
+        
+        entities = {}
+        async for record in result:
+            entity = record["e"]
+            entities[record["name"]] = {
+                "id": str(entity.id),
+                "name": entity["name"],
+                "type": entity.get("type", ""),
+                "description": entity.get("description", ""),
+                "properties": dict(entity.get("properties", {}))
+            }
+        
+        return entities
+```
+
+## 💡 存储组合策略 (2025版)
+
+### 智能存储路由
+```python
+class StorageRouter:
+    """2025年智能存储路由器"""
+    
+    def __init__(self):
+        self.kv_storage: Optional[RedisKVStorage] = None
+        self.vector_storage: Optional[PGVectorStorage] = None
+        self.graph_storage: Optional[Neo4JStorage] = None
+        
+    async def initialize_all(self, config: Dict[str, Any]):
+        """初始化所有存储"""
+        # 并行初始化存储
+        tasks = []
+        
+        if config.get("redis"):
+            self.kv_storage = RedisKVStorage(config["redis"])
+            tasks.append(self.kv_storage.initialize())
+        
+        if config.get("postgres"):
+            self.vector_storage = PGVectorStorage(config["postgres"])
+            tasks.append(self.vector_storage.initialize())
+        
+        if config.get("neo4j"):
+            self.graph_storage = Neo4JStorage(config["neo4j"])
+            tasks.append(self.graph_storage.initialize())
+        
+        # 并行初始化
+        await asyncio.gather(*tasks)
+    
+    async def store_document(self, doc_id: str, content: str, embedding: np.ndarray, metadata: Dict[str, Any]):
+        """智能文档存储"""
+        tasks = []
+        
+        # KV存储：缓存文档内容
+        if self.kv_storage:
+            tasks.append(self.kv_storage.set(f"doc:{doc_id}", {
+                "content": content,
+                "metadata": metadata
+            }, ex=3600))  # 1小时缓存
+        
+        # 向量存储：存储嵌入向量
+        if self.vector_storage:
+            tasks.append(self.vector_storage.upsert_embeddings([
+                (content, embedding, metadata)
+            ]))
+        
+        # 并行存储
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return all(isinstance(r, bool) and r for r in results if not isinstance(r, Exception))
+    
+    async def hybrid_search(self, query_vector: np.ndarray, query_text: str, top_k: int = 10) -> Dict[str, Any]:
+        """混合搜索：向量 + 图谱"""
+        # 并行执行向量搜索和图搜索
+        tasks = []
+        
+        if self.vector_storage:
+            tasks.append(self.vector_storage.similarity_search(query_vector, top_k))
+        
+        if self.graph_storage:
+            # 从查询文本提取实体名称进行图搜索
+            entities = self._extract_entities(query_text)
+            if entities:
+                tasks.append(self.graph_storage.get_subgraph(entities, max_depth=2))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return {
+            "vector_results": results[0] if len(results) > 0 and not isinstance(results[0], Exception) else [],
+            "graph_results": results[1] if len(results) > 1 and not isinstance(results[1], Exception) else {"nodes": [], "edges": []}
+        }
+    
+    def _extract_entities(self, text: str) -> List[str]:
+        """从文本提取实体名称（简化实现）"""
+        # 实际实现中应该使用NER模型
+        return []
+```
+
+## ⚠️ 注意事项 (2025版)
+
+1. **连接池管理**: 合理配置连接池大小，避免资源浪费
+2. **异步操作**: 所有I/O操作使用async/await，避免阻塞
+3. **批量处理**: 优先使用批量操作提升性能
+4. **错误处理**: 完善的异常处理和重试机制
+5. **监控告警**: 实时监控存储性能和健康状态
+6. **数据一致性**: 处理好分布式存储的一致性问题
+7. **备份恢复**: 定期备份重要数据
+8. **索引优化**: 根据查询模式优化数据库索引
+9. **缓存策略**: 合理使用缓存减少数据库压力
+10. **安全考虑**: 数据加密、访问控制、SQL注入防护
+
+这些2025年的存储后端最佳实践将为LightRAG提供高性能、高可用的数据存储解决方案！

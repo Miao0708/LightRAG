@@ -1,0 +1,637 @@
+# LightRAG 测试与部署规则
+
+## 🧪 测试架构概览
+
+LightRAG采用多层测试策略，包括单元测试、集成测试、性能测试和端到端测试，确保系统的可靠性和稳定性。
+
+## 📂 测试项目结构
+
+```
+tests/
+├── unit/                       # 单元测试
+│   ├── test_storage.py        # 存储层测试
+│   ├── test_llm.py            # LLM层测试
+│   ├── test_graph.py          # 图操作测试
+│   └── test_utils.py          # 工具函数测试
+├── integration/                # 集成测试
+│   ├── test_api.py            # API集成测试
+│   ├── test_pipeline.py       # 处理管道测试
+│   └── test_retrieval.py      # 检索功能测试
+├── performance/                # 性能测试
+│   ├── test_scalability.py    # 可扩展性测试
+│   ├── test_concurrent.py     # 并发性能测试
+│   └── test_memory.py         # 内存使用测试
+├── e2e/                       # 端到端测试
+│   ├── test_workflow.py       # 完整工作流测试
+│   └── test_user_scenarios.py # 用户场景测试
+├── fixtures/                   # 测试数据
+│   ├── documents/             # 测试文档
+│   └── expected_outputs/      # 期望输出
+└── conftest.py                # pytest配置
+```
+
+## 🔧 测试开发规范
+
+### 1. 单元测试规范
+```python
+# tests/unit/test_storage.py
+import pytest
+import asyncio
+from unittest.mock import AsyncMock, patch
+from lightrag.kg.redis_impl import RedisKVStorage
+from lightrag.kg.neo4j_impl import Neo4JStorage
+
+@pytest.mark.asyncio
+class TestRedisKVStorage:
+    """Redis KV存储单元测试"""
+    
+    @pytest.fixture
+    async def redis_storage(self):
+        """Redis存储测试夹具"""
+        storage = RedisKVStorage("redis://localhost:6379/15")  # 测试数据库
+        await storage.connect()
+        yield storage
+        await storage.disconnect()
+        
+    async def test_set_and_get(self, redis_storage):
+        """测试设置和获取功能"""
+        key = "test_key_123"
+        value = "test_value_456"
+        
+        # 设置值
+        await redis_storage.set(key, value)
+        
+        # 获取值
+        result = await redis_storage.get(key)
+        assert result == value
+        
+        # 清理
+        await redis_storage.delete(key)
+    
+    async def test_key_not_exists(self, redis_storage):
+        """测试不存在的键"""
+        result = await redis_storage.get("non_existent_key")
+        assert result is None
+    
+    async def test_delete_functionality(self, redis_storage):
+        """测试删除功能"""
+        key = "test_delete_key"
+        value = "test_value"
+        
+        await redis_storage.set(key, value)
+        assert await redis_storage.has(key) is True
+        
+        await redis_storage.delete(key)
+        assert await redis_storage.has(key) is False
+
+@pytest.mark.asyncio
+class TestNeo4jStorage:
+    """Neo4j图存储单元测试"""
+    
+    @pytest.fixture
+    async def neo4j_storage(self):
+        """Neo4j存储测试夹具"""
+        storage = Neo4JStorage()
+        await storage.connect()
+        # 清理测试数据
+        await storage._execute_query("MATCH (n:TestNode) DETACH DELETE n")
+        yield storage
+        # 测试后清理
+        await storage._execute_query("MATCH (n:TestNode) DETACH DELETE n")
+        await storage.disconnect()
+    
+    async def test_add_node(self, neo4j_storage):
+        """测试添加节点"""
+        node_id = "test_entity_123"
+        node_data = {
+            "name": "测试实体",
+            "type": "person",
+            "description": "这是一个测试实体"
+        }
+        
+        await neo4j_storage.add_node(node_id, node_data)
+        
+        # 验证节点是否添加成功
+        result = await neo4j_storage._execute_query(
+            "MATCH (n:Entity {id: $id}) RETURN n",
+            id=node_id
+        )
+        assert len(result) == 1
+        assert result[0]["n"]["name"] == "测试实体"
+```
+
+### 2. 集成测试规范
+```python
+# tests/integration/test_api.py
+import pytest
+import httpx
+from fastapi.testclient import TestClient
+from lightrag.api.lightrag_server import app
+
+@pytest.fixture
+def client():
+    """API测试客户端"""
+    return TestClient(app)
+
+@pytest.fixture
+def auth_headers():
+    """认证头信息"""
+    return {"Authorization": "Bearer test-api-key"}
+
+class TestDocumentAPI:
+    """文档管理API集成测试"""
+    
+    def test_upload_document(self, client, auth_headers):
+        """测试文档上传"""
+        # 创建测试文件
+        test_content = "这是一个测试文档内容。包含一些测试实体和关系。"
+        files = {"file": ("test.txt", test_content, "text/plain")}
+        
+        response = client.post(
+            "/documents/upload",
+            files=files,
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "id" in data
+        
+        return data["id"]  # 返回文档ID供其他测试使用
+    
+    def test_list_documents(self, client, auth_headers):
+        """测试文档列表"""
+        response = client.get("/documents", headers=auth_headers)
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+    
+    def test_delete_document(self, client, auth_headers):
+        """测试文档删除"""
+        # 先上传一个文档
+        doc_id = self.test_upload_document(client, auth_headers)
+        
+        # 删除文档
+        response = client.delete(f"/documents/{doc_id}", headers=auth_headers)
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+class TestQueryAPI:
+    """查询API集成测试"""
+    
+    def test_query_functionality(self, client, auth_headers):
+        """测试查询功能"""
+        query_data = {
+            "query": "测试查询问题",
+            "mode": "hybrid"
+        }
+        
+        response = client.post(
+            "/query",
+            json=query_data,
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "result" in data
+        assert "metadata" in data
+        assert data["metadata"]["mode"] == "hybrid"
+    
+    @pytest.mark.asyncio
+    async def test_stream_query(self, auth_headers):
+        """测试流式查询"""
+        query_data = {
+            "query": "测试流式查询",
+            "mode": "local",
+            "stream": True
+        }
+        
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            async with client.stream(
+                "POST",
+                "/query/stream",
+                json=query_data,
+                headers=auth_headers
+            ) as response:
+                assert response.status_code == 200
+                
+                chunks = []
+                async for chunk in response.aiter_text():
+                    if chunk.strip():
+                        chunks.append(chunk)
+                
+                assert len(chunks) > 0
+```
+
+### 3. 性能测试规范
+```python
+# tests/performance/test_concurrent.py
+import pytest
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
+from lightrag import LightRAG
+
+@pytest.mark.performance
+class TestConcurrentPerformance:
+    """并发性能测试"""
+    
+    @pytest.fixture
+    async def lightrag_instance(self):
+        """LightRAG实例"""
+        rag = LightRAG(
+            working_dir="./test_rag_storage",
+            # 使用测试配置
+        )
+        yield rag
+        # 清理测试数据
+        
+    async def test_concurrent_queries(self, lightrag_instance):
+        """测试并发查询性能"""
+        queries = [
+            "测试查询1",
+            "测试查询2", 
+            "测试查询3",
+            "测试查询4",
+            "测试查询5"
+        ] * 20  # 100个查询
+        
+        start_time = time.time()
+        
+        # 并发执行查询
+        tasks = [
+            lightrag_instance.aquery(query, mode="hybrid")
+            for query in queries
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        end_time = time.time()
+        total_time = end_time - start_time
+        
+        # 性能断言
+        assert total_time < 60  # 100个查询应该在60秒内完成
+        
+        # 检查错误率
+        errors = [r for r in results if isinstance(r, Exception)]
+        error_rate = len(errors) / len(results)
+        assert error_rate < 0.05  # 错误率应该小于5%
+        
+        print(f"并发查询性能: {len(queries)}个查询, 总时间: {total_time:.2f}秒")
+        print(f"平均响应时间: {total_time/len(queries):.3f}秒")
+        print(f"错误率: {error_rate:.2%}")
+    
+    async def test_document_processing_performance(self, lightrag_instance):
+        """测试文档处理性能"""
+        # 创建大型测试文档
+        large_document = "这是一个大型测试文档。" * 10000  # 约20万字符
+        
+        start_time = time.time()
+        
+        await lightrag_instance.ainsert(large_document)
+        
+        end_time = time.time()
+        processing_time = end_time - start_time
+        
+        # 性能断言
+        assert processing_time < 300  # 大文档处理应该在5分钟内完成
+        
+        print(f"文档处理性能: {len(large_document)}字符, 处理时间: {processing_time:.2f}秒")
+```
+
+## 🚀 部署配置
+
+### 1. Docker部署
+```dockerfile
+# Dockerfile
+FROM python:3.10-slim
+
+# 设置工作目录
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
+COPY requirements.txt .
+COPY pyproject.toml .
+
+# 安装Python依赖
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -e .
+
+# 复制应用代码
+COPY . .
+
+# 创建必要的目录
+RUN mkdir -p /app/rag_storage /app/logs /app/inputs
+
+# 设置环境变量
+ENV PYTHONPATH=/app
+ENV WORKING_DIR=/app/rag_storage
+ENV LOG_DIR=/app/logs
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 启动命令
+CMD ["python", "-m", "lightrag.api.lightrag_server"]
+```
+
+### 2. Docker Compose配置
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  lightrag:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # 从用户配置读取环境变量
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WEBUI_TITLE=我的图谱知识库
+      - LOG_LEVEL=INFO
+      
+      # 数据库连接
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=lightrag
+      - POSTGRES_PASSWORD=lightrag123
+      - POSTGRES_DATABASE=lightrag_db
+      
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=neo4j123
+      
+      - REDIS_URI=redis://redis:6379/0
+      
+      # LLM配置
+      - LLM_BINDING=siliconflow
+      - LLM_MODEL=Qwen/Qwen2.5-14B-Instruct
+      - LLM_BINDING_API_KEY=${SILICONFLOW_API_KEY}
+    volumes:
+      - ./rag_storage:/app/rag_storage
+      - ./logs:/app/logs
+      - ./inputs:/app/inputs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      - POSTGRES_USER=lightrag
+      - POSTGRES_PASSWORD=lightrag123
+      - POSTGRES_DB=lightrag_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lightrag -d lightrag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.15
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j123
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neo4j123 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+```
+
+### 3. Kubernetes部署
+```yaml
+# k8s-deploy/lightrag/values.yaml
+# 根据用户配置的Kubernetes部署配置
+replicaCount: 2
+
+image:
+  repository: lightrag/lightrag
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: lightrag.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: lightrag-tls
+      hosts:
+        - lightrag.example.com
+
+env:
+  # 从用户配置映射环境变量
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  WEBUI_TITLE: "我的图谱知识库"
+  
+  # 数据库连接(Kubernetes服务名)
+  POSTGRES_HOST: "postgresql"
+  NEO4J_URI: "bolt://neo4j:7687"
+  REDIS_URI: "redis://redis-master:6379/0"
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: "fast-ssd"
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# 数据库依赖
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "lightrag123"
+    database: "lightrag_db"
+
+neo4j:
+  enabled: true
+  auth:
+    password: "neo4j123"
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+```
+
+## 🔍 监控和运维
+
+### 1. 健康检查配置
+```python
+# lightrag/api/health.py
+from fastapi import APIRouter, HTTPException
+from lightrag.kg.shared_storage import StorageManager
+
+router = APIRouter()
+
+@router.get("/health")
+async def health_check():
+    """基础健康检查"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0"
+    }
+
+@router.get("/health/detailed")
+async def detailed_health_check():
+    """详细健康检查"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {}
+    }
+    
+    # 检查存储服务
+    storage_manager = StorageManager()
+    
+    try:
+        # Redis连接检查
+        await storage_manager.kv_storage.get("health_check")
+        health_status["services"]["redis"] = "healthy"
+    except Exception as e:
+        health_status["services"]["redis"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    try:
+        # PostgreSQL连接检查
+        await storage_manager.vector_storage.health_check()
+        health_status["services"]["postgresql"] = "healthy"
+    except Exception as e:
+        health_status["services"]["postgresql"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    try:
+        # Neo4j连接检查
+        await storage_manager.graph_storage.health_check()
+        health_status["services"]["neo4j"] = "healthy"
+    except Exception as e:
+        health_status["services"]["neo4j"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    return health_status
+```
+
+### 2. 日志配置
+```python
+# lightrag/utils/logging.py
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+
+def setup_logging():
+    """设置日志配置"""
+    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    log_dir = os.getenv('LOG_DIR', './logs')
+    
+    # 创建日志目录
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 配置根日志器
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            # 控制台输出
+            logging.StreamHandler(),
+            # 文件输出(轮转)
+            RotatingFileHandler(
+                os.path.join(log_dir, 'lightrag.log'),
+                maxBytes=int(os.getenv('LOG_MAX_BYTES', 52428800)),  # 50MB
+                backupCount=int(os.getenv('LOG_BACKUP_COUNT', 10))
+            )
+        ]
+    )
+```
+
+## ⚠️ 注意事项
+
+1. **测试数据隔离**: 使用独立的测试数据库和存储
+2. **性能基准**: 建立性能基准线，监控性能回归
+3. **资源限制**: 在容器中设置合适的资源限制
+4. **安全配置**: 生产环境中使用强密码和SSL证书
+5. **数据备份**: 配置定期数据备份策略
+6. **监控告警**: 设置关键指标的监控和告警
+7. **日志管理**: 配置日志轮转和中央化日志收集
+description:
+globs:
+alwaysApply: false
+---

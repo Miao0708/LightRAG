@@ -1,0 +1,970 @@
+# LightRAG 前端开发规则 (2025版)
+
+## 🎨 前端架构概览
+
+LightRAG Web UI 基于2025年最新React技术栈构建，提供文档管理、知识图谱可视化和智能问答界面。
+
+### 🚀 2025年技术栈升级
+- **React 19**: 使用use()、useOptimistic、useFormStatus等新特性
+- **Vite 7**: 替代Create React App，极速开发和构建
+- **TypeScript 5.6**: 最新类型系统和语法支持
+- **Vitest 2.0**: 现代化测试框架，完全替代Jest
+- **TanStack Query 5**: 状态管理和数据获取
+- **Zustand 5**: 轻量级状态管理
+- **Tailwind CSS 3.4**: 样式解决方案
+- **shadcn/ui**: 组件库基础
+
+## 📂 前端项目结构 (2025优化版)
+
+```
+lightrag_webui/
+├── src/
+│   ├── api/                    # API接口层
+│   │   └── lightrag.ts        # LightRAG API客户端
+│   ├── components/             # 组件库
+│   │   ├── ui/                # 基础UI组件(shadcn/ui)
+│   │   ├── documents/         # 文档管理组件
+│   │   ├── graph/             # 图谱可视化组件
+│   │   ├── retrieval/         # 查询界面组件
+│   │   └── status/            # 状态监控组件
+│   ├── features/               # 功能模块
+│   │   ├── DocumentManager.tsx
+│   │   ├── GraphViewer.tsx
+│   │   └── RetrievalTesting.tsx
+│   ├── hooks/                  # 自定义Hooks
+│   │   ├── useLightragGraph.tsx
+│   │   ├── useQueryModes.tsx   # 2025新增
+│   │   └── useStreamingQuery.tsx # 2025新增
+│   ├── stores/                 # Zustand状态管理
+│   │   ├── graph.ts
+│   │   ├── settings.ts
+│   │   └── query.ts           # 2025新增
+│   ├── lib/                   # 工具函数
+│   │   ├── utils.ts
+│   │   ├── query-classifier.ts # 2025新增
+│   │   └── performance.ts     # 2025新增
+│   └── types/                 # TypeScript类型定义
+│       ├── api.ts
+│       ├── graph.ts
+│       └── query.ts           # 2025新增
+├── package.json               # 2025依赖配置
+├── vite.config.ts            # Vite 7配置
+├── vitest.config.ts          # Vitest测试配置
+├── tailwind.config.js        # Tailwind CSS配置
+└── tsconfig.json             # TypeScript配置
+```
+
+## 🔧 2025年Vite 7配置最佳实践
+
+### vite.config.ts优化配置
+```typescript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [
+    react({
+      // React 19优化
+      babel: {
+        plugins: [
+          ['@babel/plugin-transform-react-jsx', { runtime: 'automatic' }]
+        ]
+      }
+    })
+  ],
+  
+  // 2025年构建优化
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    sourcemap: false,
+    
+    // 代码分割优化
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React核心库
+          'react-vendor': ['react', 'react-dom'],
+          
+          // UI组件库
+          'ui-vendor': [
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-toast',
+            '@radix-ui/react-dropdown-menu'
+          ],
+          
+          // 图谱可视化
+          'graph-vendor': ['cytoscape', 'd3'],
+          
+          // 状态管理和数据获取
+          'state-vendor': ['zustand', '@tanstack/react-query'],
+          
+          // 工具库
+          'utils-vendor': ['lodash-es', 'date-fns']
+        }
+      }
+    },
+    
+    // 性能优化
+    chunkSizeWarningLimit: 1000
+  },
+  
+  // 开发服务器配置
+  server: {
+    port: 3000,
+    host: true,
+    proxy: {
+      // API代理到后端
+      '/api': {
+        target: 'http://localhost:9621',
+        changeOrigin: true
+      }
+    }
+  },
+  
+  // 路径别名
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '@/components': resolve(__dirname, 'src/components'),
+      '@/hooks': resolve(__dirname, 'src/hooks'),
+      '@/stores': resolve(__dirname, 'src/stores'),
+      '@/lib': resolve(__dirname, 'src/lib'),
+      '@/types': resolve(__dirname, 'src/types')
+    }
+  },
+  
+  // 环境变量
+  define: {
+    __DEV__: JSON.stringify(process.env.NODE_ENV === 'development')
+  }
+})
+```
+
+### package.json 2025年依赖配置
+```json
+{
+  "name": "lightrag-webui",
+  "version": "2.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext ts,tsx",
+    "lint:fix": "eslint src --ext ts,tsx --fix",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@tanstack/react-query": "^5.0.0",
+    "zustand": "^5.0.0",
+    "react-router-dom": "^6.26.0",
+    "react-i18next": "^14.0.0",
+    
+    "tailwindcss": "^3.4.0",
+    "@tailwindcss/typography": "^0.5.0",
+    
+    "@radix-ui/react-dialog": "^1.1.0",
+    "@radix-ui/react-toast": "^1.2.0",
+    "@radix-ui/react-dropdown-menu": "^2.1.0",
+    "@radix-ui/react-select": "^2.1.0",
+    "lucide-react": "^0.400.0",
+    
+    "cytoscape": "^3.29.0",
+    "cytoscape-cola": "^2.5.0",
+    "react-cytoscapejs": "^2.0.0",
+    
+    "axios": "^1.7.0",
+    "lodash-es": "^4.17.21",
+    "date-fns": "^3.6.0",
+    "clsx": "^2.1.0",
+    "class-variance-authority": "^0.7.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.6.0",
+    
+    "vitest": "^2.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/jest-dom": "^6.4.0",
+    "@testing-library/user-event": "^14.5.0",
+    
+    "eslint": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint-plugin-react": "^7.35.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/lodash-es": "^4.17.0"
+  }
+}
+```
+
+## ⚛️ React 19新特性应用
+
+### 1. use() Hook数据获取
+```typescript
+// 使用use()替代useEffect进行数据获取
+import { use, Suspense } from 'react'
+
+interface DocumentListProps {
+  documentsPromise: Promise<Document[]>
+}
+
+function DocumentList({ documentsPromise }: DocumentListProps) {
+  const documents = use(documentsPromise) // 直接使用Promise
+  
+  return (
+    <div className="space-y-4">
+      {documents.map(doc => (
+        <DocumentCard key={doc.id} document={doc} />
+      ))}
+    </div>
+  )
+}
+
+// 在父组件中使用
+function DocumentManager() {
+  const documentsPromise = useMemo(() => 
+    api.getDocuments(), [refresh]
+  )
+  
+  return (
+    <Suspense fallback={<DocumentListSkeleton />}>
+      <DocumentList documentsPromise={documentsPromise} />
+    </Suspense>
+  )
+}
+```
+
+### 2. useOptimistic乐观更新
+```typescript
+// 实现查询的乐观更新
+import { useOptimistic, useTransition } from 'react'
+
+interface QueryResult {
+  id: string
+  query: string
+  result: string
+  timestamp: number
+  status: 'pending' | 'completed' | 'error'
+}
+
+function QueryInterface() {
+  const [queries, setQueries] = useState<QueryResult[]>([])
+  const [isPending, startTransition] = useTransition()
+  
+  const [optimisticQueries, addOptimisticQuery] = useOptimistic(
+    queries,
+    (state, newQuery: QueryResult) => [...state, newQuery]
+  )
+  
+  const handleQuery = async (queryText: string) => {
+    const optimisticQuery: QueryResult = {
+      id: Date.now().toString(),
+      query: queryText,
+      result: '',
+      timestamp: Date.now(),
+      status: 'pending'
+    }
+    
+    // 乐观更新UI
+    addOptimisticQuery(optimisticQuery)
+    
+    try {
+      const result = await api.query({
+        query: queryText,
+        mode: 'hybrid',
+        enable_rerank: true
+      })
+      
+      // 实际结果返回后更新状态
+      startTransition(() => {
+        setQueries(prev => [
+          ...prev,
+          { ...optimisticQuery, result, status: 'completed' }
+        ])
+      })
+    } catch (error) {
+      startTransition(() => {
+        setQueries(prev => [
+          ...prev,
+          { ...optimisticQuery, result: error.message, status: 'error' }
+        ])
+      })
+    }
+  }
+  
+  return (
+    <div className="space-y-4">
+      <QueryForm onSubmit={handleQuery} disabled={isPending} />
+      <QueryHistory queries={optimisticQueries} />
+    </div>
+  )
+}
+```
+
+### 3. useFormStatus表单状态
+```typescript
+// 文档上传表单的状态管理
+import { useFormStatus } from 'react'
+
+function UploadForm() {
+  const uploadDocument = async (formData: FormData) => {
+    try {
+      await api.uploadDocument(formData)
+      // 上传成功处理
+    } catch (error) {
+      // 错误处理
+    }
+  }
+  
+  return (
+    <form action={uploadDocument} className="space-y-4">
+      <FileInput name="file" accept=".txt,.pdf,.md" />
+      <SubmitButton />
+    </form>
+  )
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus()
+  
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className={cn(
+        "px-4 py-2 rounded-md font-medium transition-colors",
+        pending 
+          ? "bg-gray-400 cursor-not-allowed" 
+          : "bg-blue-600 hover:bg-blue-700 text-white"
+      )}
+    >
+      {pending ? (
+        <>
+          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          上传中...
+        </>
+      ) : (
+        '上传文档'
+      )}
+    </button>
+  )
+}
+```
+
+## 🎯 状态管理最佳实践 (Zustand 5)
+
+### 查询状态管理
+```typescript
+// stores/query.ts - 2025年查询状态管理
+import { create } from 'zustand'
+import { devtools, persist } from 'zustand/middleware'
+
+export type QueryMode = 'naive' | 'local' | 'global' | 'hybrid' | 'mix' | 'bypass'
+
+interface QueryState {
+  // 查询历史
+  history: QueryResult[]
+  
+  // 当前设置
+  currentMode: QueryMode
+  enableRerank: boolean
+  topK: number
+  
+  // 流式查询状态
+  streamingQuery: string | null
+  streamingResult: string
+  
+  // 性能统计
+  performanceStats: {
+    [mode: string]: {
+      averageTime: number
+      successRate: number
+      totalQueries: number
+    }
+  }
+  
+  // Actions
+  addQuery: (query: QueryResult) => void
+  setMode: (mode: QueryMode) => void
+  setRerank: (enabled: boolean) => void
+  setTopK: (k: number) => void
+  
+  // 流式查询
+  startStreaming: (query: string) => void
+  appendStreamResult: (chunk: string) => void
+  endStreaming: () => void
+  
+  // 性能统计
+  updatePerformanceStats: (mode: QueryMode, duration: number, success: boolean) => void
+  
+  // 智能模式选择
+  suggestMode: (query: string) => QueryMode
+}
+
+export const useQueryStore = create<QueryState>()(
+  devtools(
+    persist(
+      (set, get) => ({
+        history: [],
+        currentMode: 'hybrid',
+        enableRerank: true,
+        topK: 10,
+        streamingQuery: null,
+        streamingResult: '',
+        performanceStats: {},
+        
+        addQuery: (query) => set((state) => ({
+          history: [query, ...state.history.slice(0, 99)] // 保留最近100条
+        })),
+        
+        setMode: (mode) => set({ currentMode: mode }),
+        setRerank: (enabled) => set({ enableRerank: enabled }),
+        setTopK: (k) => set({ topK: k }),
+        
+        startStreaming: (query) => set({
+          streamingQuery: query,
+          streamingResult: ''
+        }),
+        
+        appendStreamResult: (chunk) => set((state) => ({
+          streamingResult: state.streamingResult + chunk
+        })),
+        
+        endStreaming: () => set({
+          streamingQuery: null,
+          streamingResult: ''
+        }),
+        
+        updatePerformanceStats: (mode, duration, success) => set((state) => {
+          const stats = state.performanceStats[mode] || {
+            averageTime: 0,
+            successRate: 0,
+            totalQueries: 0
+          }
+          
+          const newTotal = stats.totalQueries + 1
+          const newAverageTime = (stats.averageTime * stats.totalQueries + duration) / newTotal
+          const newSuccessRate = (stats.successRate * stats.totalQueries + (success ? 1 : 0)) / newTotal
+          
+          return {
+            performanceStats: {
+              ...state.performanceStats,
+              [mode]: {
+                averageTime: newAverageTime,
+                successRate: newSuccessRate,
+                totalQueries: newTotal
+              }
+            }
+          }
+        }),
+        
+        suggestMode: (query) => {
+          // 智能模式选择逻辑
+          const queryLower = query.toLowerCase()
+          
+          if (queryLower.includes('比较') || queryLower.includes('分析')) {
+            return 'mix'
+          } else if (queryLower.includes('什么是') || queryLower.includes('定义')) {
+            return 'global'
+          } else if (queryLower.includes('详细') || queryLower.includes('具体')) {
+            return 'local'
+          } else {
+            return 'hybrid'
+          }
+        }
+      }),
+      {
+        name: 'lightrag-query-store',
+        partialize: (state) => ({
+          currentMode: state.currentMode,
+          enableRerank: state.enableRerank,
+          topK: state.topK,
+          performanceStats: state.performanceStats
+        })
+      }
+    ),
+    { name: 'QueryStore' }
+  )
+)
+```
+
+## 🔄 数据获取最佳实践 (TanStack Query 5)
+
+### API客户端设计
+```typescript
+// api/lightrag.ts - 2025年API客户端
+import { QueryClient } from '@tanstack/react-query'
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5分钟
+      gcTime: 10 * 60 * 1000,   // 10分钟 (原cacheTime)
+      retry: (failureCount, error) => {
+        // 智能重试策略
+        if (error.status === 404) return false
+        return failureCount < 3
+      },
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000)
+    }
+  }
+})
+
+// Query Keys工厂
+export const queryKeys = {
+  documents: {
+    all: ['documents'] as const,
+    list: () => [...queryKeys.documents.all, 'list'] as const,
+    detail: (id: string) => [...queryKeys.documents.all, 'detail', id] as const,
+    status: () => [...queryKeys.documents.all, 'status'] as const
+  },
+  query: {
+    all: ['query'] as const,
+    result: (params: QueryParams) => [...queryKeys.query.all, 'result', params] as const,
+    modes: () => [...queryKeys.query.all, 'modes'] as const,
+    performance: () => [...queryKeys.query.all, 'performance'] as const
+  },
+  graph: {
+    all: ['graph'] as const,
+    stats: () => [...queryKeys.graph.all, 'stats'] as const,
+    entities: () => [...queryKeys.graph.all, 'entities'] as const,
+    relationships: () => [...queryKeys.graph.all, 'relationships'] as const
+  }
+}
+
+// API函数
+export const api = {
+  // 查询相关
+  query: async (params: QueryParams): Promise<QueryResult> => {
+    const response = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    })
+    
+    if (!response.ok) {
+      throw new Error(`查询失败: ${response.statusText}`)
+    }
+    
+    return response.json()
+  },
+  
+  // 流式查询
+  queryStream: async function* (params: QueryParams): AsyncGenerator<string> {
+    const response = await fetch('/api/query/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    })
+    
+    if (!response.body) throw new Error('流式响应不可用')
+    
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n\n')
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6))
+            if (data.chunk) {
+              yield data.chunk
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+  
+  // 文档管理
+  uploadDocument: async (formData: FormData): Promise<UploadResult> => {
+    const response = await fetch('/api/documents/upload', {
+      method: 'POST',
+      body: formData
+    })
+    
+    if (!response.ok) {
+      throw new Error(`上传失败: ${response.statusText}`)
+    }
+    
+    return response.json()
+  },
+  
+  getDocuments: async (): Promise<Document[]> => {
+    const response = await fetch('/api/documents')
+    if (!response.ok) throw new Error('获取文档列表失败')
+    return response.json()
+  }
+}
+```
+
+### 自定义Hooks
+```typescript
+// hooks/useStreamingQuery.tsx - 流式查询Hook
+import { useState, useCallback } from 'react'
+import { useQueryStore } from '@/stores/query'
+
+export function useStreamingQuery() {
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  
+  const {
+    streamingQuery,
+    streamingResult,
+    startStreaming,
+    appendStreamResult,
+    endStreaming
+  } = useQueryStore()
+  
+  const startQuery = useCallback(async (params: QueryParams) => {
+    if (isStreaming) return
+    
+    setIsStreaming(true)
+    setError(null)
+    startStreaming(params.query)
+    
+    try {
+      for await (const chunk of api.queryStream(params)) {
+        appendStreamResult(chunk)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '查询失败')
+    } finally {
+      setIsStreaming(false)
+      endStreaming()
+    }
+  }, [isStreaming, startStreaming, appendStreamResult, endStreaming])
+  
+  return {
+    startQuery,
+    isStreaming,
+    error,
+    query: streamingQuery,
+    result: streamingResult
+  }
+}
+
+// hooks/useQueryModes.tsx - 查询模式管理
+import { useQuery } from '@tanstack/react-query'
+
+export function useQueryModes() {
+  const { currentMode, setMode, suggestMode } = useQueryStore()
+  
+  // 获取支持的查询模式
+  const { data: modes = [], isLoading } = useQuery({
+    queryKey: queryKeys.query.modes(),
+    queryFn: async () => {
+      const response = await fetch('/api/query/modes')
+      return response.json()
+    },
+    staleTime: Infinity // 查询模式很少变化
+  })
+  
+  const selectMode = useCallback((mode: QueryMode) => {
+    setMode(mode)
+  }, [setMode])
+  
+  const autoSelectMode = useCallback((query: string) => {
+    const suggested = suggestMode(query)
+    setMode(suggested)
+    return suggested
+  }, [suggestMode, setMode])
+  
+  return {
+    modes,
+    isLoading,
+    currentMode,
+    selectMode,
+    autoSelectMode
+  }
+}
+```
+
+## 🎨 组件设计模式 (2025版)
+
+### 复合组件模式
+```typescript
+// components/QueryInterface/index.tsx
+interface QueryInterfaceProps {
+  className?: string
+  onQueryComplete?: (result: QueryResult) => void
+}
+
+export function QueryInterface({ className, onQueryComplete }: QueryInterfaceProps) {
+  return (
+    <div className={cn("space-y-6", className)}>
+      <QueryInterface.ModeSelector />
+      <QueryInterface.InputForm />
+      <QueryInterface.PerformanceStats />
+      <QueryInterface.History />
+    </div>
+  )
+}
+
+// 子组件
+QueryInterface.ModeSelector = function ModeSelector() {
+  const { modes, currentMode, selectMode } = useQueryModes()
+  
+  return (
+    <Select value={currentMode} onValueChange={selectMode}>
+      <SelectTrigger>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {modes.map(mode => (
+          <SelectItem key={mode.value} value={mode.value}>
+            <div className="flex items-center justify-between w-full">
+              <span>{mode.label}</span>
+              <Badge variant="secondary">{mode.avgTime}s</Badge>
+            </div>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+QueryInterface.InputForm = function InputForm() {
+  const { startQuery } = useStreamingQuery()
+  const { currentMode, enableRerank, topK } = useQueryStore()
+  
+  const handleSubmit = async (formData: FormData) => {
+    const query = formData.get('query') as string
+    
+    await startQuery({
+      query,
+      mode: currentMode,
+      enable_rerank: enableRerank,
+      chunk_top_k: topK
+    })
+  }
+  
+  return (
+    <form action={handleSubmit} className="space-y-4">
+      <Textarea
+        name="query"
+        placeholder="输入您的问题..."
+        className="min-h-[100px]"
+        required
+      />
+      <div className="flex justify-between items-center">
+        <QuerySettings />
+        <SubmitButton />
+      </div>
+    </form>
+  )
+}
+```
+
+## 🧪 测试最佳实践 (Vitest 2.0)
+
+### vitest.config.ts
+```typescript
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    css: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      exclude: [
+        'node_modules/',
+        'src/test/',
+        '**/*.d.ts'
+      ]
+    }
+  },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src')
+    }
+  }
+})
+```
+
+### 组件测试示例
+```typescript
+// components/__tests__/QueryInterface.test.tsx
+import { render, screen, userEvent } from '@testing-library/react'
+import { QueryProvider } from '@/providers/QueryProvider'
+import { QueryInterface } from '@/components/QueryInterface'
+
+const TestWrapper = ({ children }: { children: React.ReactNode }) => (
+  <QueryProvider>
+    {children}
+  </QueryProvider>
+)
+
+describe('QueryInterface', () => {
+  it('应该正确渲染查询界面', () => {
+    render(<QueryInterface />, { wrapper: TestWrapper })
+    
+    expect(screen.getByPlaceholderText('输入您的问题...')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /提交/i })).toBeInTheDocument()
+  })
+  
+  it('应该支持查询模式切换', async () => {
+    const user = userEvent.setup()
+    render(<QueryInterface />, { wrapper: TestWrapper })
+    
+    const modeSelector = screen.getByRole('combobox')
+    await user.click(modeSelector)
+    
+    const hybridOption = screen.getByText('混合检索')
+    await user.click(hybridOption)
+    
+    expect(screen.getByDisplayValue('hybrid')).toBeInTheDocument()
+  })
+  
+  it('应该支持流式查询', async () => {
+    const user = userEvent.setup()
+    const mockStartQuery = vi.fn()
+    
+    // Mock useStreamingQuery hook
+    vi.mock('@/hooks/useStreamingQuery', () => ({
+      useStreamingQuery: () => ({
+        startQuery: mockStartQuery,
+        isStreaming: false,
+        error: null
+      })
+    }))
+    
+    render(<QueryInterface />, { wrapper: TestWrapper })
+    
+    const queryInput = screen.getByPlaceholderText('输入您的问题...')
+    const submitButton = screen.getByRole('button', { name: /提交/i })
+    
+    await user.type(queryInput, '什么是人工智能？')
+    await user.click(submitButton)
+    
+    expect(mockStartQuery).toHaveBeenCalledWith({
+      query: '什么是人工智能？',
+      mode: 'hybrid',
+      enable_rerank: true,
+      chunk_top_k: 10
+    })
+  })
+})
+```
+
+## 🚀 性能优化 (2025版)
+
+### 代码分割和懒加载
+```typescript
+// 路由级别代码分割
+import { lazy, Suspense } from 'react'
+import { Routes, Route } from 'react-router-dom'
+
+// 懒加载页面组件
+const DocumentManager = lazy(() => import('@/features/DocumentManager'))
+const GraphViewer = lazy(() => import('@/features/GraphViewer'))
+const RetrievalTesting = lazy(() => import('@/features/RetrievalTesting'))
+
+function App() {
+  return (
+    <Routes>
+      <Route 
+        path="/documents" 
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <DocumentManager />
+          </Suspense>
+        } 
+      />
+      <Route 
+        path="/graph" 
+        element={
+          <Suspense fallback={<GraphSkeleton />}>
+            <GraphViewer />
+          </Suspense>
+        } 
+      />
+      <Route 
+        path="/query" 
+        element={
+          <Suspense fallback={<QuerySkeleton />}>
+            <RetrievalTesting />
+          </Suspense>
+        } 
+      />
+    </Routes>
+  )
+}
+```
+
+### 虚拟化长列表
+```typescript
+// 对于大量数据的文档列表，使用虚拟化
+import { FixedSizeList as List } from 'react-window'
+
+interface DocumentListProps {
+  documents: Document[]
+}
+
+function VirtualizedDocumentList({ documents }: DocumentListProps) {
+  const Row = ({ index, style }: { index: number; style: React.CSSProperties }) => {
+    const document = documents[index]
+    
+    return (
+      <div style={style} className="border-b">
+        <DocumentCard document={document} />
+      </div>
+    )
+  }
+  
+  return (
+    <List
+      height={600}
+      itemCount={documents.length}
+      itemSize={120}
+      className="scrollbar-thin"
+    >
+      {Row}
+    </List>
+  )
+}
+```
+
+## 💡 开发最佳实践总结
+
+1. **React 19优先**: 使用新特性提升开发效率和用户体验
+2. **Vite 7构建**: 极速开发环境和优化的生产构建
+3. **TypeScript严格模式**: 类型安全和更好的开发体验
+4. **组件复用**: 使用复合组件模式和自定义Hooks
+5. **状态管理**: Zustand处理本地状态，TanStack Query处理服务器状态
+6. **性能优化**: 代码分割、懒加载、虚拟化、缓存策略
+7. **测试覆盖**: Vitest + Testing Library确保代码质量
+8. **用户体验**: 乐观更新、加载状态、错误边界
+9. **可访问性**: 遵循WCAG指南，支持键盘导航
+10. **国际化**: react-i18next支持多语言
+
+这些2025年的前端技术栈将为LightRAG项目提供现代化、高性能的用户界面！

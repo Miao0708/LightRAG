@@ -1,0 +1,739 @@
+# LightRAG LLM 集成开发规则
+
+## 🤖 LLM架构概览
+
+LightRAG支持灵活的多模型配置策略，可以为不同的AI任务配置不同的模型，实现成本与性能的最佳平衡。根据用户配置，当前使用：
+
+### 任务特化配置
+- **实体抽取**: SiliconFlow Qwen2.5-7B (快速+经济)
+- **实体总结**: SiliconFlow Qwen2.5-72B (理解能力强)
+- **关系总结**: SiliconFlow Qwen2.5-72B (逻辑推理强)
+- **查询响应**: OpenRouter Qwen3-235B (对话能力强)
+- **关键词提取**: SiliconFlow Qwen2.5-7B (快速处理)
+
+### 成本策略矩阵
+| 任务类型 | 复杂度 | 推荐模型 | 成本等级 | 性能要求 |
+|---------|--------|----------|----------|----------|
+| **实体提取** | 低 | SiliconFlow 7B | 💰 | 速度优先 |
+| **关键词提取** | 低 | SiliconFlow 7B | 💰 | 速度优先 |
+| **实体摘要** | 中 | SiliconFlow 72B | 💰💰 | 质量平衡 |
+| **关系摘要** | 中 | SiliconFlow 72B | 💰💰 | 质量平衡 |
+| **查询响应** | 高 | OpenAI GPT-4o | 💰💰💰 | 质量优先 |
+
+## 📂 LLM模块结构
+
+```
+lightrag/llm/
+├── __init__.py                 # LLM工厂和通用接口
+├── openai.py                   # OpenAI/OpenAI兼容接口
+├── siliconflow.py             # 硅基流动 (性价比之选)
+├── openrouter.py              # OpenRouter (模型聚合)
+├── gemini.py                  # Google Gemini
+├── azure_openai.py            # Azure OpenAI
+├── ollama.py                  # Ollama本地模型
+├── zhipu.py                   # 智谱AI (中文优化)
+├── anthropic.py               # Anthropic Claude
+├── nvidia_openai.py           # NVIDIA API
+├── bedrock.py                 # AWS Bedrock
+├── hf.py                      # HuggingFace
+├── jina.py                    # Jina AI
+├── lmdeploy.py                # LMDeploy
+└── llama_index_impl.py        # LlamaIndex集成
+```
+
+## 🔧 LLM接口规范
+
+### 1. 统一异步接口
+```python
+async def llm_func(
+    prompt: str,
+    system_prompt: str = None,
+    history_messages: List[dict] = None,
+    keyword_extraction: bool = False,
+    **kwargs
+) -> str:
+    """
+    LLM调用的统一接口
+    
+    Args:
+        prompt: 用户提示词
+        system_prompt: 系统提示词
+        history_messages: 历史对话
+        keyword_extraction: 是否为关键词提取任务
+        **kwargs: 其他参数 (temperature, max_tokens等)
+    
+    Returns:
+        str: LLM响应结果
+    """
+    pass
+```
+
+### 2. 流式响应接口
+```python
+async def llm_stream_func(
+    prompt: str,
+    system_prompt: str = None,
+    history_messages: List[dict] = None,
+    **kwargs
+) -> AsyncIterator[str]:
+    """流式LLM响应"""
+    async for chunk in stream_response:
+        yield chunk
+```
+
+### 3. 嵌入模型接口
+```python
+async def embedding_func(texts: List[str]) -> np.ndarray:
+    """
+    文本嵌入接口
+    
+    Args:
+        texts: 待嵌入的文本列表
+    
+    Returns:
+        np.ndarray: 嵌入向量矩阵，形状为 (len(texts), embedding_dim)
+    """
+    pass
+```
+
+## 🎯 任务特化配置
+
+### 1. 多模型任务分配
+```python
+# 根据用户配置的任务特化LLM
+LLM_CONFIG = {
+    'entity_extraction': {
+        'binding': 'siliconflow',
+        'model': 'Qwen/Qwen2.5-7B-Instruct',
+        'host': 'https://api.siliconflow.cn/v1',
+        'api_key': os.getenv('ENTITY_EXTRACTION_LLM_BINDING_API_KEY'),
+        'temperature': 0.1,
+        'max_tokens': 32000,
+        'priority': 6  # 中等优先级
+    },
+    'entity_summary': {
+        'binding': 'siliconflow',
+        'model': 'Qwen/Qwen2.5-72B-Instruct',
+        'host': 'https://api.siliconflow.cn/v1',
+        'api_key': os.getenv('ENTITY_SUMMARY_LLM_BINDING_API_KEY'),
+        'temperature': 0.1,
+        'priority': 7  # 高优先级
+    },
+    'relation_summary': {
+        'binding': 'siliconflow',
+        'model': 'Qwen/Qwen2.5-72B-Instruct',
+        'host': 'https://api.siliconflow.cn/v1',
+        'api_key': os.getenv('RELATION_SUMMARY_LLM_BINDING_API_KEY'),
+        'temperature': 0.1,
+        'priority': 7  # 高优先级
+    },
+    'query_response': {
+        'binding': 'openrouter',
+        'model': 'qwen/qwen3-235b-a22b-07-25:free',
+        'host': 'https://openrouter.ai/api/v1',
+        'api_key': os.getenv('QUERY_LLM_BINDING_API_KEY'),
+        'temperature': 0.1,
+        'priority': 8  # 最高优先级
+    },
+    'keyword_extraction': {
+        'binding': 'siliconflow',
+        'model': 'Qwen/Qwen2.5-7B-Instruct',
+        'host': 'https://api.siliconflow.cn/v1',
+        'api_key': os.getenv('KEYWORD_EXTRACTION_LLM_BINDING_API_KEY'),
+        'temperature': 0.1,
+        'priority': 5  # 较低优先级
+    }
+}
+```
+
+### 2. 动态模型选择
+```python
+def get_llm_func(task_type: str) -> Callable:
+    """根据任务类型返回对应的LLM函数"""
+    config = LLM_CONFIG.get(task_type, LLM_CONFIG.get('default'))
+    
+    if not config:
+        raise ValueError(f"未找到任务类型 {task_type} 的配置")
+    
+    # 根据绑定类型选择对应的实现
+    binding_map = {
+        'siliconflow': siliconflow_llm_func,
+        'openrouter': openrouter_llm_func,
+        'openai': openai_llm_func,
+        'gemini': gemini_llm_func,
+        'zhipu': zhipu_llm_func,
+        'ollama': ollama_llm_func,
+        'anthropic': anthropic_llm_func
+    }
+    
+    llm_func = binding_map.get(config['binding'])
+    if not llm_func:
+        raise ValueError(f"不支持的LLM绑定类型: {config['binding']}")
+    
+    return partial(llm_func, config=config)
+```
+
+### 3. 双层关键词提取
+```python
+async def get_keywords_from_query(
+    query: str, 
+    llm_func: Callable,
+    extract_type: str = "both"  # "hl", "ll", "both"
+) -> Tuple[List[str], List[str]]:
+    """
+    从查询中提取双层关键词
+    
+    Args:
+        query: 用户查询
+        llm_func: LLM函数
+        extract_type: 提取类型 (hl=高级, ll=低级, both=双层)
+    
+    Returns:
+        Tuple[List[str], List[str]]: (high_level_keywords, low_level_keywords)
+    """
+    
+    hl_keywords, ll_keywords = [], []
+    
+    if extract_type in ["hl", "both"]:
+        # 高级关键词提取 (概念性、抽象性)
+        hl_prompt = f"""
+        从以下查询中提取高级关键词，关注概念性、抽象性的内容：
+        查询: {query}
+        
+        请提取出关键的概念、主题、抽象概念等高级关键词。
+        返回格式: keyword1, keyword2, keyword3
+        """
+        hl_result = await llm_func(hl_prompt, keyword_extraction=True)
+        hl_keywords = [kw.strip() for kw in hl_result.split(',') if kw.strip()]
+    
+    if extract_type in ["ll", "both"]:
+        # 低级关键词提取 (具体实体、事实性)
+        ll_prompt = f"""
+        从以下查询中提取低级关键词，关注具体的实体、人名、地名、事实等：
+        查询: {query}
+        
+        请提取出具体的实体名称、专有名词、事实性关键词等。
+        返回格式: keyword1, keyword2, keyword3
+        """
+        ll_result = await llm_func(ll_prompt, keyword_extraction=True)
+        ll_keywords = [kw.strip() for kw in ll_result.split(',') if kw.strip()]
+    
+    return hl_keywords, ll_keywords
+```
+
+## 🔧 实现开发规范
+
+### 1. SiliconFlow实现 (性价比之选)
+```python
+async def siliconflow_llm_func(
+    prompt: str,
+    system_prompt: str = None,
+    history_messages: List[dict] = None,
+    config: dict = None,
+    **kwargs
+) -> str:
+    """SiliconFlow LLM实现"""
+    
+    headers = {
+        "Authorization": f"Bearer {config['api_key']}",
+        "Content-Type": "application/json"
+    }
+    
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    
+    # 添加历史消息
+    if history_messages:
+        messages.extend(history_messages)
+    
+    messages.append({"role": "user", "content": prompt})
+    
+    data = {
+        "model": config['model'],
+        "messages": messages,
+        "temperature": config.get('temperature', 0.1),
+        "max_tokens": config.get('max_tokens', 32000),
+        "stream": False
+    }
+    
+    # 添加流式处理支持
+    if kwargs.get('stream', False):
+        data['stream'] = True
+        return await _siliconflow_stream_request(config['host'], data, headers)
+    
+    async with httpx.AsyncClient(timeout=240) as client:
+        response = await client.post(
+            f"{config['host']}/chat/completions",
+            json=data,
+            headers=headers
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"SiliconFlow API错误: {response.status_code} - {response.text}")
+        
+        result = response.json()
+        return result['choices'][0]['message']['content']
+```
+
+### 2. OpenRouter实现 (模型聚合)
+```python
+async def openrouter_llm_func(
+    prompt: str,
+    system_prompt: str = None,
+    config: dict = None,
+    **kwargs
+) -> str:
+    """OpenRouter LLM实现"""
+    
+    headers = {
+        "Authorization": f"Bearer {config['api_key']}",
+        "HTTP-Referer": "https://lightrag.dev",  # OpenRouter要求
+        "X-Title": "LightRAG",
+        "Content-Type": "application/json"
+    }
+    
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    
+    messages.append({"role": "user", "content": prompt})
+    
+    data = {
+        "model": config['model'],
+        "messages": messages,
+        "temperature": config.get('temperature', 0.1),
+        "max_tokens": config.get('max_tokens', 32000)
+    }
+    
+    async with httpx.AsyncClient(timeout=240) as client:
+        response = await client.post(
+            f"{config['host']}/chat/completions",
+            json=data,
+            headers=headers
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"OpenRouter API错误: {response.status_code} - {response.text}")
+        
+        result = response.json()
+        return result['choices'][0]['message']['content']
+```
+
+### 3. 嵌入模型实现 (BAAI/bge-m3)
+```python
+async def siliconflow_embedding_func(texts: List[str]) -> np.ndarray:
+    """SiliconFlow嵌入模型实现"""
+    api_key = os.getenv('EMBEDDING_BINDING_API_KEY')
+    model = os.getenv('EMBEDDING_MODEL', 'BAAI/bge-m3')
+    host = os.getenv('EMBEDDING_BINDING_HOST', 'https://api.siliconflow.cn/v1')
+    embedding_dim = int(os.getenv('EMBEDDING_DIM', 1024))
+    
+    if not api_key:
+        raise ValueError("缺少嵌入模型API密钥")
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # 批量处理，避免单次请求过大
+    batch_size = int(os.getenv('EMBEDDING_BATCH_NUM', 50))
+    all_embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        
+        data = {
+            "model": model,
+            "input": batch,
+            "encoding_format": "float"
+        }
+        
+        async with httpx.AsyncClient(timeout=240) as client:
+            response = await client.post(
+                f"{host}/embeddings",
+                json=data,
+                headers=headers
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"嵌入模型API错误: {response.status_code} - {response.text}")
+            
+            result = response.json()
+            batch_embeddings = [item['embedding'] for item in result['data']]
+            all_embeddings.extend(batch_embeddings)
+    
+    embeddings_array = np.array(all_embeddings)
+    
+    # 验证维度
+    if embeddings_array.shape[1] != embedding_dim:
+        logger.warning(f"嵌入维度不匹配: 期望{embedding_dim}, 实际{embeddings_array.shape[1]}")
+    
+    return embeddings_array
+```
+
+## ⚡ 性能优化
+
+### 1. 智能缓存机制
+```python
+import hashlib
+from functools import lru_cache
+from typing import Optional
+
+class LLMCache:
+    def __init__(self, redis_client=None):
+        self.redis = redis_client
+        self.local_cache = {}
+        self.cache_enabled = os.getenv('ENABLE_LLM_CACHE', 'true').lower() == 'true'
+        self.extract_cache_enabled = os.getenv('ENABLE_LLM_CACHE_FOR_EXTRACT', 'true').lower() == 'true'
+    
+    def get_cache_key(self, prompt: str, config: dict) -> str:
+        """生成缓存键"""
+        cache_data = {
+            'prompt': prompt,
+            'model': config.get('model'),
+            'temperature': config.get('temperature'),
+            'max_tokens': config.get('max_tokens')
+        }
+        cache_str = json.dumps(cache_data, sort_keys=True)
+        return f"llm_cache:{hashlib.md5(cache_str.encode()).hexdigest()}"
+    
+    async def get(self, cache_key: str) -> Optional[str]:
+        """获取缓存"""
+        if not self.cache_enabled:
+            return None
+        
+        # 优先从Redis获取
+        if self.redis:
+            try:
+                cached = await self.redis.get(cache_key)
+                if cached:
+                    return cached
+            except Exception as e:
+                logger.warning(f"Redis缓存读取失败: {e}")
+        
+        # 降级到本地缓存
+        return self.local_cache.get(cache_key)
+    
+    async def set(self, cache_key: str, value: str, expire: int = 86400) -> None:
+        """设置缓存"""
+        if not self.cache_enabled:
+            return
+        
+        # 存储到Redis
+        if self.redis:
+            try:
+                await self.redis.set(cache_key, value, ex=expire)
+            except Exception as e:
+                logger.warning(f"Redis缓存写入失败: {e}")
+        
+        # 存储到本地缓存
+        self.local_cache[cache_key] = value
+        
+        # 限制本地缓存大小
+        if len(self.local_cache) > 1000:
+            # 删除最老的缓存项
+            oldest_key = next(iter(self.local_cache))
+            del self.local_cache[oldest_key]
+
+# 全局缓存实例
+llm_cache = LLMCache()
+
+async def cached_llm_call(prompt: str, config: dict, **kwargs) -> str:
+    """带缓存的LLM调用"""
+    cache_key = llm_cache.get_cache_key(prompt, config)
+    
+    # 尝试从缓存获取
+    cached_result = await llm_cache.get(cache_key)
+    if cached_result:
+        logger.debug(f"LLM缓存命中: {cache_key[:16]}...")
+        return cached_result
+    
+    # 缓存未命中，调用LLM
+    result = await actual_llm_call(prompt, config, **kwargs)
+    
+    # 保存到缓存
+    await llm_cache.set(cache_key, result)
+    
+    return result
+```
+
+### 2. 并发控制
+```python
+import asyncio
+from asyncio import Semaphore
+from collections import defaultdict
+
+# 根据用户配置控制并发
+MAX_ASYNC = int(os.getenv('MAX_ASYNC', 16))
+EMBEDDING_MAX_ASYNC = int(os.getenv('EMBEDDING_FUNC_MAX_ASYNC', 32))
+
+# 不同任务类型的信号量
+task_semaphores = {
+    'entity_extraction': Semaphore(8),    # 实体提取：高并发
+    'keyword_extraction': Semaphore(8),   # 关键词提取：高并发
+    'entity_summary': Semaphore(4),       # 实体摘要：中等并发
+    'relation_summary': Semaphore(4),     # 关系摘要：中等并发
+    'query_response': Semaphore(2),       # 查询响应：低并发
+    'embedding': Semaphore(EMBEDDING_MAX_ASYNC)
+}
+
+async def controlled_llm_call(
+    prompt: str, 
+    task_type: str = 'default',
+    **kwargs
+) -> str:
+    """带并发控制的LLM调用"""
+    semaphore = task_semaphores.get(task_type, task_semaphores['query_response'])
+    
+    async with semaphore:
+        return await cached_llm_call(prompt, **kwargs)
+```
+
+### 3. 优先级队列
+```python
+import heapq
+from dataclasses import dataclass
+from typing import Any, Callable
+
+@dataclass
+class LLMTask:
+    priority: int  # 数字越大优先级越高
+    task_id: str
+    prompt: str
+    config: dict
+    callback: Callable
+    timestamp: float = None
+    
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = time.time()
+    
+    def __lt__(self, other):
+        # 优先级高的排在前面，如果优先级相同则按时间排序
+        if self.priority != other.priority:
+            return self.priority > other.priority
+        return self.timestamp < other.timestamp
+
+class LLMTaskScheduler:
+    def __init__(self):
+        self.task_queue = []
+        self.running_tasks = set()
+        self.max_concurrent = MAX_ASYNC
+        
+    async def submit_task(self, task: LLMTask):
+        """提交任务到优先级队列"""
+        heapq.heappush(self.task_queue, task)
+        await self._process_queue()
+    
+    async def _process_queue(self):
+        """处理任务队列"""
+        while (len(self.running_tasks) < self.max_concurrent 
+               and self.task_queue):
+            
+            task = heapq.heappop(self.task_queue)
+            self.running_tasks.add(task.task_id)
+            
+            # 异步执行任务
+            asyncio.create_task(self._execute_task(task))
+    
+    async def _execute_task(self, task: LLMTask):
+        """执行LLM任务"""
+        try:
+            result = await cached_llm_call(task.prompt, task.config)
+            await task.callback(result)
+        except Exception as e:
+            logger.error(f"LLM任务执行失败 {task.task_id}: {e}")
+        finally:
+            self.running_tasks.discard(task.task_id)
+            # 继续处理队列
+            await self._process_queue()
+
+# 全局任务调度器
+llm_scheduler = LLMTaskScheduler()
+```
+
+## 🔐 错误处理和重试
+
+### 1. 智能重试机制
+```python
+import backoff
+from typing import Type, Tuple
+
+class LLMError(Exception):
+    """LLM调用错误基类"""
+    pass
+
+class LLMRateLimitError(LLMError):
+    """速率限制错误"""
+    pass
+
+class LLMServerError(LLMError):
+    """服务器错误"""
+    pass
+
+@backoff.on_exception(
+    backoff.expo,
+    (httpx.RequestError, httpx.HTTPStatusError, LLMServerError),
+    max_tries=3,
+    max_time=300,
+    giveup=lambda e: isinstance(e, LLMRateLimitError)
+)
+async def robust_llm_call(prompt: str, config: dict, **kwargs) -> str:
+    """带重试机制的LLM调用"""
+    try:
+        return await llm_func(prompt, config, **kwargs)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:  # Rate limit
+            raise LLMRateLimitError(f"API速率限制: {e.response.text}")
+        elif e.response.status_code >= 500:  # Server error
+            raise LLMServerError(f"服务器错误: {e.response.text}")
+        else:
+            logger.error(f"HTTP错误 {e.response.status_code}: {e.response.text}")
+            raise LLMError(f"API调用失败: {e.response.text}")
+    except Exception as e:
+        logger.error(f"LLM调用意外错误: {e}")
+        raise LLMError(f"LLM调用失败: {str(e)}")
+```
+
+### 2. 降级策略
+```python
+async def fallback_llm_call(
+    prompt: str, 
+    primary_config: dict,
+    fallback_config: dict = None,
+    **kwargs
+) -> str:
+    """LLM调用降级策略"""
+    
+    # 尝试主要模型
+    try:
+        return await robust_llm_call(prompt, primary_config, **kwargs)
+    except LLMRateLimitError:
+        # 速率限制时等待重试
+        await asyncio.sleep(60)
+        raise
+    except Exception as e:
+        logger.warning(f"主要LLM失败: {e}")
+        
+        # 如果有降级配置，尝试降级模型
+        if fallback_config:
+            try:
+                logger.info(f"切换到降级模型: {fallback_config['model']}")
+                return await robust_llm_call(prompt, fallback_config, **kwargs)
+            except Exception as fallback_error:
+                logger.error(f"降级模型也失败: {fallback_error}")
+        
+        # 所有尝试都失败，抛出原始错误
+        raise e
+```
+
+## 🔧 配置管理
+
+### 环境变量配置映射
+```python
+def load_llm_config() -> dict:
+    """从环境变量加载LLM配置"""
+    config = {}
+    
+    # 全局默认配置
+    config['default'] = {
+        'binding': os.getenv('LLM_BINDING', 'siliconflow'),
+        'model': os.getenv('LLM_MODEL', 'Qwen/Qwen2.5-14B-Instruct'),
+        'host': os.getenv('LLM_BINDING_HOST', 'https://api.siliconflow.cn/v1'),
+        'api_key': os.getenv('LLM_BINDING_API_KEY'),
+        'temperature': float(os.getenv('TEMPERATURE', 0.1)),
+        'timeout': int(os.getenv('TIMEOUT', 240)),
+        'max_tokens': int(os.getenv('MAX_TOKENS', 32000))
+    }
+    
+    # 任务特化配置
+    for task in ['entity_extraction', 'entity_summary', 'relation_summary', 
+                 'query_response', 'keyword_extraction']:
+        task_config = {}
+        prefix = task.upper()
+        
+        for key in ['BINDING', 'MODEL', 'BINDING_HOST', 'BINDING_API_KEY']:
+            env_key = f"{prefix}_LLM_{key}"
+            value = os.getenv(env_key)
+            if value:
+                config_key = key.lower().replace('binding_', '')
+                task_config[config_key] = value
+        
+        if task_config:
+            config[task] = {**config['default'], **task_config}
+    
+    # 嵌入模型配置
+    config['embedding'] = {
+        'binding': os.getenv('EMBEDDING_BINDING', 'siliconflow'),
+        'model': os.getenv('EMBEDDING_MODEL', 'BAAI/bge-m3'),
+        'host': os.getenv('EMBEDDING_BINDING_HOST', 'https://api.siliconflow.cn/v1'),
+        'api_key': os.getenv('EMBEDDING_BINDING_API_KEY'),
+        'dim': int(os.getenv('EMBEDDING_DIM', 1024)),
+        'batch_size': int(os.getenv('EMBEDDING_BATCH_NUM', 50))
+    }
+    
+    return config
+```
+
+## 🧪 测试规范
+
+### 1. LLM功能测试
+```python
+@pytest.mark.asyncio
+async def test_llm_functionality():
+    """测试LLM基本功能"""
+    config = {
+        'binding': 'siliconflow',
+        'model': 'Qwen/Qwen2.5-7B-Instruct',
+        'api_key': 'test_key'
+    }
+    
+    prompt = "测试LLM功能"
+    response = await siliconflow_llm_func(prompt, config=config)
+    
+    assert isinstance(response, str)
+    assert len(response) > 0
+
+@pytest.mark.asyncio
+async def test_task_specialization():
+    """测试任务特化配置"""
+    tasks = ['entity_extraction', 'entity_summary', 'query_response']
+    
+    for task in tasks:
+        llm_func = get_llm_func(task)
+        assert llm_func is not None
+        
+        # 测试不同任务的响应
+        response = await llm_func("测试任务特化")
+        assert isinstance(response, str)
+```
+
+### 2. 嵌入功能测试
+```python
+@pytest.mark.asyncio
+async def test_embedding_functionality():
+    """测试嵌入模型功能"""
+    texts = ["测试文本1", "测试文本2", "测试文本3"]
+    embeddings = await siliconflow_embedding_func(texts)
+    
+    expected_dim = int(os.getenv('EMBEDDING_DIM', 1024))
+    
+    assert embeddings.shape[0] == len(texts)
+    assert embeddings.shape[1] == expected_dim
+    assert np.all(np.isfinite(embeddings))  # 确保没有NaN或Inf值
+```
+
+## ⚠️ 注意事项
+
+1. **API密钥安全**: 不要在代码中硬编码API密钥，使用环境变量
+2. **任务特化**: 合理配置不同任务的模型以优化成本和性能
+3. **速率限制**: 遵守各提供商的API调用限制，实现智能重试
+4. **成本控制**: 监控API调用成本，合理选择模型
+5. **错误处理**: 完善的异常处理和降级机制
+6. **模型一致性**: 嵌入模型在整个系统中保持一致
+7. **缓存策略**: 合理使用缓存减少重复调用
+8. **并发控制**: 根据任务类型设置合适的并发限制
+9. **优先级管理**: 重要任务设置更高优先级
+10. **超时设置**: 合理设置超时时间避免长时间等待
