@@ -1,3 +1,7 @@
+---
+description: LightRAG 2025年技术趋势与最佳实践
+alwaysApply: false
+---
 # LightRAG 2025年技术趋势与最佳实践
 
 ## 🚀 2025年技术发展趋势
@@ -513,7 +517,520 @@ CMD ["uvicorn", "lightrag.api.lightrag_server:app", "--host", "0.0.0.0", "--port
 6. **部署优化**: 多阶段Docker构建，健康检查
 
 这些2025年的最新技术栈将显著提升LightRAG项目的性能和开发体验！
-description:
-globs:
-alwaysApply: false
+---
+# LightRAG 2025年技术趋势与最佳实践
+
+## 🚀 2025年技术发展趋势
+
+### RAG技术进化
+- **多模态RAG**: RAG-Anything统一处理文本、图像、音视频
+- **双层次检索**: 高级关键词(概念性) + 低级关键词(实体性)
+- **图谱+向量融合**: 知识图谱与向量检索深度结合
+- **增强推理能力**: 从浅层检索到深层推理的跃升
+
+### FastAPI 2025最佳实践
+
+#### 性能优化新技术栈
+```python
+# 2025年推荐的高性能技术栈
+
+# 1. 使用Polars替代pandas (10x性能提升)
+import polars as pl
+async def process_data(data: list) -> pl.DataFrame:
+    df = pl.DataFrame(data)
+    return df.lazy().select([
+        pl.col("*").fill_null(""),
+        pl.col("score").cast(pl.Float64)
+    ]).collect()
+
+# 2. httpx + asyncio并发API调用
+import httpx
+import asyncio
+
+async def batch_api_calls(urls: list[str]) -> list[dict]:
+    async with httpx.AsyncClient() as client:
+        tasks = [client.get(url) for url in urls]
+        responses = await asyncio.gather(*tasks)
+        return [r.json() for r in responses]
+
+# 3. 使用tenacity智能重试
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10)
+)
+async def reliable_api_call(url: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+# 4. ORJSON快速序列化 (2-3x速度提升)
+import orjson
+from fastapi.responses import ORJSONResponse
+
+@app.get("/fast-json", response_class=ORJSONResponse)
+async def fast_json_response():
+    return {"data": large_data_structure}
+```
+
+#### FastAPI异步最佳实践 (2025版)
+```python
+from fastapi import FastAPI, BackgroundTasks, Depends
+import asyncio
+from contextlib import asynccontextmanager
+
+# 应用生命周期管理
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时初始化
+    await init_connections()
+    yield
+    # 关闭时清理
+    await cleanup_connections()
+
+app = FastAPI(lifespan=lifespan)
+
+# 高性能路由设计
+@app.get("/")
+async def read_root():
+    """纯异步路由 - 推荐用法"""
+    return {"Hello": "World"}
+
+@app.post("/process")
+async def process_data(
+    data: dict,
+    background_tasks: BackgroundTasks
+):
+    """主要任务异步处理，后台任务并行"""
+    # 主要处理逻辑
+    result = await main_processing(data)
+    
+    # 后台任务不阻塞响应
+    background_tasks.add_task(log_processing, data, result)
+    
+    return {"result": result}
+
+# 依赖注入优化
+async def get_db_session():
+    async with db_pool.acquire() as conn:
+        yield conn
+
+@app.get("/users/{user_id}")
+async def get_user(
+    user_id: int,
+    db = Depends(get_db_session)
+):
+    return await db.fetch_one("SELECT * FROM users WHERE id = $1", user_id)
+```
+
+### React + TypeScript 2025新标准
+
+#### Vite 7 + React 19配置
+```json
+// package.json - 2025推荐配置
+{
+  "name": "lightrag-webui",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest",
+    "test:ui": "vitest --ui"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.6.0",
+    "@tanstack/react-query": "^5.0.0",
+    "zustand": "^5.0.0",
+    "tailwindcss": "^3.4.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0",
+    "vitest": "^2.0.0",
+    "@testing-library/react": "^16.0.0"
+  }
+}
+```
+
+```typescript
+// vite.config.ts - 2025优化配置
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          ui: ['@radix-ui/react-dialog', '@radix-ui/react-toast']
+        }
+      }
+    }
+  },
+  server: {
+    port: 3000,
+    host: true
+  }
+})
+```
+
+#### React 19新特性应用
+```typescript
+// 使用React 19的新特性
+import { use, useOptimistic, useFormStatus } from 'react'
+
+// 1. use() Hook替代useEffect数据获取
+function UserProfile({ userId }: { userId: string }) {
+  const user = use(fetchUser(userId)) // 直接使用Promise
+  
+  return <div>{user.name}</div>
+}
+
+// 2. useOptimistic乐观更新
+function TodoList() {
+  const [todos, setTodos] = useState([])
+  const [optimisticTodos, addOptimisticTodo] = useOptimistic(
+    todos,
+    (state, newTodo) => [...state, newTodo]
+  )
+  
+  async function addTodo(formData: FormData) {
+    const newTodo = { id: Date.now(), text: formData.get('text') }
+    addOptimisticTodo(newTodo)
+    
+    try {
+      await fetch('/api/todos', {
+        method: 'POST',
+        body: JSON.stringify(newTodo)
+      })
+      setTodos([...todos, newTodo])
+    } catch (error) {
+      // 自动回滚乐观更新
+    }
+  }
+  
+  return (
+    <form action={addTodo}>
+      {optimisticTodos.map(todo => (
+        <div key={todo.id}>{todo.text}</div>
+      ))}
+      <input name="text" />
+      <SubmitButton />
+    </form>
+  )
+}
+
+// 3. useFormStatus表单状态
+function SubmitButton() {
+  const { pending } = useFormStatus()
+  
+  return (
+    <button type="submit" disabled={pending}>
+      {pending ? '提交中...' : '提交'}
+    </button>
+  )
+}
+```
+
+## 📦 三方模块最佳实践 (2025版)
+
+### FastAPI高级配置
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+import uvloop  # 性能提升2-4x
+
+# 使用uvloop提升事件循环性能
+uvloop.install()
+
+app = FastAPI(
+    title="LightRAG API",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
+)
+
+# 中间件配置 (2025推荐)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 生产环境部署 (2025最佳实践)
+"""
+# 使用Gunicorn + Uvicorn workers
+gunicorn lightrag.api.lightrag_server:app \
+    -w 4 \
+    -k uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:9621 \
+    --timeout 240 \
+    --keepalive 2 \
+    --max-requests 1000 \
+    --max-requests-jitter 100
+"""
+```
+
+### Redis异步连接池最佳实践
+```python
+import redis.asyncio as redis
+from typing import Optional
+import asyncio
+
+class RedisManager:
+    def __init__(self):
+        self.pool: Optional[redis.ConnectionPool] = None
+        self.client: Optional[redis.Redis] = None
+    
+    async def init_connection(self):
+        """初始化Redis连接池 - 2025最佳配置"""
+        self.pool = redis.ConnectionPool.from_url(
+            "redis://localhost:6379/0",
+            max_connections=30,          # 连接池大小
+            socket_connect_timeout=5,    # 连接超时
+            socket_timeout=30,           # 操作超时
+            retry_on_timeout=True,       # 超时重试
+            health_check_interval=30,    # 健康检查
+            encoding='utf-8',
+            decode_responses=True
+        )
+        self.client = redis.Redis.from_pool(self.pool)
+    
+    async def close_connection(self):
+        """正确关闭连接"""
+        if self.client:
+            await self.client.aclose()
+        if self.pool:
+            await self.pool.aclose()
+    
+    async def get_client(self) -> redis.Redis:
+        """获取Redis客户端"""
+        if not self.client:
+            await self.init_connection()
+        return self.client
+
+# 全局Redis管理器
+redis_manager = RedisManager()
+
+# 使用示例
+async def cache_data(key: str, data: dict, expire: int = 3600):
+    client = await redis_manager.get_client()
+    await client.set(key, json.dumps(data), ex=expire)
+
+async def get_cached_data(key: str) -> Optional[dict]:
+    client = await redis_manager.get_client()
+    data = await client.get(key)
+    return json.loads(data) if data else None
+```
+
+### PostgreSQL + pgvector异步操作
+```python
+import asyncpg
+import numpy as np
+from typing import List, Tuple
+
+class PGVectorManager:
+    def __init__(self):
+        self.pool: Optional[asyncpg.Pool] = None
+    
+    async def init_pool(self):
+        """初始化PostgreSQL连接池 - 2025优化配置"""
+        self.pool = await asyncpg.create_pool(
+            host="localhost",
+            port=5432,
+            user="postgres",
+            password="password", 
+            database="lightrag_db",
+            min_size=5,
+            max_size=30,
+            command_timeout=60,
+            server_settings={
+                'jit': 'off',                    # 禁用JIT以提升小查询性能
+                'shared_preload_libraries': 'pg_stat_statements',
+                'max_connections': '200'
+            }
+        )
+        
+        # 创建向量表和索引
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                CREATE EXTENSION IF NOT EXISTS vector;
+                
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id SERIAL PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    embedding vector(1024),
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                
+                CREATE INDEX IF NOT EXISTS embeddings_vector_idx 
+                ON embeddings USING ivfflat (embedding vector_cosine_ops) 
+                WITH (lists = 100);
+            """)
+    
+    async def upsert_embeddings(
+        self, 
+        data: List[Tuple[str, np.ndarray, dict]]
+    ):
+        """批量插入向量数据"""
+        async with self.pool.acquire() as conn:
+            await conn.executemany("""
+                INSERT INTO embeddings (content, embedding, metadata)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (id) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    embedding = EXCLUDED.embedding,
+                    metadata = EXCLUDED.metadata
+            """, [
+                (content, embedding.tolist(), metadata)
+                for content, embedding, metadata in data
+            ])
+    
+    async def similarity_search(
+        self, 
+        query_vector: np.ndarray, 
+        top_k: int = 10,
+        threshold: float = 0.7
+    ) -> List[dict]:
+        """向量相似度搜索 - 优化版"""
+        async with self.pool.acquire() as conn:
+            # 使用余弦相似度搜索
+            rows = await conn.fetch("""
+                SELECT id, content, metadata, 
+                       1 - (embedding <=> $1::vector) as similarity
+                FROM embeddings
+                WHERE 1 - (embedding <=> $1::vector) > $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
+            """, query_vector.tolist(), threshold, top_k)
+            
+            return [dict(row) for row in rows]
+
+# 全局PG管理器
+pg_manager = PGVectorManager()
+```
+
+## 🔥 性能监控与调试 (2025版)
+
+### py-spy生产环境性能分析
+```bash
+# 实时性能监控
+py-spy top --pid <fastapi_worker_pid>
+
+# 生成火焰图
+py-spy record -o profile.svg --pid <fastapi_worker_pid> --duration 60
+
+# 内存使用分析
+py-spy dump --pid <fastapi_worker_pid>
+```
+
+### 自动化测试最佳实践
+```python
+# 使用pytest + httpx进行API测试
+import pytest
+import httpx
+from fastapi.testclient import TestClient
+
+@pytest.mark.asyncio
+async def test_query_performance():
+    """测试查询性能基准"""
+    async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        start_time = time.time()
+        
+        response = await ac.post("/query", json={
+            "query": "什么是人工智能？",
+            "mode": "hybrid",
+            "enable_rerank": True
+        })
+        
+        end_time = time.time()
+        
+        assert response.status_code == 200
+        assert (end_time - start_time) < 2.0  # 性能要求：2秒内响应
+        
+        data = response.json()
+        assert "result" in data
+        assert len(data["result"]) > 0
+
+# Vitest前端测试
+"""
+// vitest.config.ts
+import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts']
+  }
+})
+"""
+```
+
+## 🚀 部署优化 (2025版)
+
+### Docker多阶段构建优化
+```dockerfile
+# 2025年Docker最佳实践
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+COPY lightrag_webui/package*.json ./
+RUN npm ci --only=production
+COPY lightrag_webui/ ./
+RUN npm run build
+
+FROM python:3.12-slim AS backend-builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.12-slim AS runtime
+WORKDIR /app
+
+# 安装运行时依赖
+COPY --from=backend-builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=backend-builder /usr/local/bin /usr/local/bin
+
+# 复制应用代码
+COPY lightrag/ ./lightrag/
+COPY --from=frontend-builder /app/frontend/dist ./lightrag/api/webui/
+
+# 设置环境变量
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9621/health || exit 1
+
+# 非root用户运行
+RUN useradd --create-home --shell /bin/bash lightrag
+USER lightrag
+
+EXPOSE 9621
+CMD ["uvicorn", "lightrag.api.lightrag_server:app", "--host", "0.0.0.0", "--port", "9621", "--workers", "4"]
+```
+
+## 💡 关键要点总结
+
+1. **FastAPI性能**: 异步优先，使用uvloop，ORJSON序列化
+2. **数据处理**: Polars替代pandas，httpx并发调用
+3. **前端技术**: React 19 + Vite 7，淘汰CRA
+4. **数据库连接**: 连接池管理，异步操作，批量处理
+5. **监控调试**: py-spy性能分析，自动化测试
+6. **部署优化**: 多阶段Docker构建，健康检查
+
+这些2025年的最新技术栈将显著提升LightRAG项目的性能和开发体验！
 ---
